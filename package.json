@@ -1,0 +1,29 @@
+{
+    "name": "pg-bossier",
+    "version": "0.0.0",
+    "description": "Operational data-plane on pg-boss: forensic preservation with lineage and failure classes, typed query API, mid-flight progress, and subscribable job events. Extends pg-boss, never replaces it.",
+    "author": "Andrei Lavrenov <andrei@lav.ren>",
+    "license": "MIT",
+    "type": "module",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/elfensky/pg-bossier.git"
+    },
+    "bugs": {
+        "url": "https://github.com/elfensky/pg-bossier/issues"
+    },
+    "homepage": "https://github.com/elfensky/pg-bossier#readme",
+    "scripts": {
+        "build": "tsc",
+        "lint": "eslint .",
+        "lint:fix": "eslint . --fix"
+    },
+    "peerDependencies": {
+        "pg-boss": "^12.18.2"
+    },
+    "devDependencies": {
+        "eslint": "^10.4.0",
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.59.0"
+    }
+}
