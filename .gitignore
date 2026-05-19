@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Git worktrees (per CLAUDE.md § Branching, worktrees, and Git workflow)
+.worktrees/
+
 # Build output
 dist/
 build/

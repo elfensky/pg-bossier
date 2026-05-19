@@ -16,3 +16,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Placeholder `src/index.ts` so the build pipeline is exercisable end-to-end.
 - ESLint flat config (`eslint.config.js`) with `typescript-eslint` `recommended-type-checked` + `stylistic-type-checked` presets, using `projectService` for tsconfig auto-discovery.
 - `npm run lint` and `npm run lint:fix` scripts.
+- Working conventions in `CLAUDE.md`: Critical rules (KISS, faithful reporting, doc sync, no direct pushes to `main`); Branching/worktree/Git workflow (single-trunk on `main`, worktree-per-branch default, `--no-ff` merges, no squash, version-on-merge); File guidelines (chunked reads, broad rename search, file/function size preferences); explicit "verify before claiming done" rule in Build / test / run.
+- `.worktrees/` added to `.gitignore`.

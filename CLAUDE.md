@@ -8,6 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The canonical scope document is **[issue #1](https://github.com/elfensky/pg-bossier/issues/1)** ("Requirements: what pg-bossier should achieve"). Treat it as the rubric — any feature, refactor, or design choice must be justifiable against the goals and non-goals it lists. Issue #1 itself explicitly notes: "Anything not explicitly in scope is out — feature requests outside this boundary get closed with a reference to this issue."
 
+## Critical rules
+
+- **KISS.** Simple solutions only. Don't overengineer. Don't add abstractions for hypothetical future needs. Three similar lines beats a premature abstraction. When in doubt about an open question, default to the simpler choice and surface the tradeoff rather than silently picking a clever one.
+- **Report outcomes faithfully.** If lint, build, or tests fail, say so with the actual output. If you didn't run a verification step, say so — don't imply it ran. Never claim "all checks pass" when output shows failures. Never suppress or simplify failing checks to manufacture a green result. Never characterize incomplete or broken work as done.
+- **Keep docs in sync with code.** When a change affects `CLAUDE.md`, `CHANGELOG.md`, or an open issue, update the doc in the same change — not a separate follow-up. Stale docs are worse than no docs.
+- **Never push directly to `main`** (after the initial scaffolding commit). Feature work goes through a worktree → branch → merge, even for small changes. Exceptions are user-explicit only. See § Branching, worktrees, and Git workflow.
+
 ## What pg-bossier is
 
 A **JS/TS library that layers on top of [pg-boss](https://github.com/timgit/pg-boss)** to provide an **operational data plane** — capabilities pg-boss has explicitly declined to take on:
@@ -15,7 +22,7 @@ A **JS/TS library that layers on top of [pg-boss](https://github.com/timgit/pg-b
 - **Forensic preservation with lineage and failure classification.** Every job preserved forever (surviving pg-boss's archive→delete cleanup), with typed failure semantics (transient / non-retryable / cancelled / expired / superseded) and explicit lineage links between retries, reschedules, and singleton supersessions. "Why did job X produce result Y?" answerable with one typed query, not by string-matching error text.
 - **Operational query API.** Live and historical reads through typed methods — not just status counts, but operational shapes like `peek` / `findById` / `listActive` / `listStalled` / `getAttemptChain` / `getActiveWorkers`. Consumers never drop to `$queryRaw` for debugging or operations.
 - **Mid-flight progress that survives retries.** Long-running jobs persist progress (not just emit it) so it survives worker crashes and pg-boss's DELETE+re-INSERT retry path.
-- **Reactive surface.** Every job state transition lands as a queryable row *and* is published to an in-process emitter. Consumers wire to events, not 5-second polling loops. Same substrate is what consumer-owned OpenTelemetry exporters build on (we don't ship those).
+- **Reactive surface.** Every job state transition lands as a queryable row _and_ is published to an in-process emitter. Consumers wire to events, not 5-second polling loops. Same substrate is what consumer-owned OpenTelemetry exporters build on (we don't ship those).
 
 pg-boss stays an **unmodified npm dependency** — pg-bossier extends it, never replaces it.
 
@@ -38,7 +45,7 @@ From issue #1. These are not up for casual revisiting inside an implementation P
 
 ## pg-boss compatibility contract
 
-Goal 4 from issue #1 names *which* pg-boss surfaces we depend on, and under what stability assumption. "Stay close to pg-boss" is meaningless without naming the parts:
+Goal 4 from issue #1 names _which_ pg-boss surfaces we depend on, and under what stability assumption. "Stay close to pg-boss" is meaningless without naming the parts:
 
 - **Stable (we depend, treat as contract).** pg-boss's documented public JS API — the methods consumers already call (`send`, `fetch`, `complete`, `fail`, `work`, `touch`, etc.). Upstream breakage here is a major-version concern, both for pg-boss and by extension for us.
 - **Transitional (we depend, tested per supported pg-boss version).** Reads against `pgboss.job` and `pgboss.archive` schemas. Tracked in the CI matrix; expect to update bindings on pg-boss minor bumps without that itself being a pg-bossier breaking change.
@@ -70,21 +77,21 @@ Optimize for this shape first. Generalization to broader OSS consumers is a post
 
 Issue #1 explicitly defers the following — each must be opened as its own issue **before** implementation, not chosen ad-hoc inside another PR:
 
-| Decision | Status |
-|---|---|
-| Strategic approach (fork vs layer vs upstream) | Deferred to a separate issue |
-| Method signatures for query / progress / audit / events | Per-requirement issue |
-| Audit capture mechanism (Postgres trigger vs app hook vs both) | Per-requirement issue (Goal 1) |
-| Audit table schema, retention semantics, lineage fields | Per-requirement issue (Goal 1) |
-| Failure classification taxonomy (exact enum values, how workers signal them) | Per-requirement issue (Goal 1) |
-| Operational read API shapes (`peek` / `findById` / `listActive` / `listStalled` / `getAttemptChain` / `getActiveWorkers`) | Per-requirement issue (Goal 2) |
-| Progress storage location (`pgboss.job.output` vs sidecar table) | Per-requirement issue (Goal 3) |
-| Retry-resume semantics, `previousOutput`, opt-in flags | Per-requirement issue (Goal 3) |
-| pg-boss / Postgres version matrix; exact stable/transitional/forbidden surface lists | Per-requirement issue (Goal 4) |
-| Distribution shape (single package, monorepo, separate Prisma adapter) | Per-requirement issue (Goal 5) |
-| Reactive surface mechanism (in-process `EventEmitter` vs Postgres `LISTEN/NOTIFY` vs both) | Per-requirement issue (Goal 6) |
-| Event schema (what events fire, what payload, persisted vs ephemeral) | Per-requirement issue (Goal 6) |
-| Test coverage targets, performance budgets | Operational, follows from success criteria |
+| Decision                                                                                                                  | Status                                     |
+| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| Strategic approach (fork vs layer vs upstream)                                                                            | Deferred to a separate issue               |
+| Method signatures for query / progress / audit / events                                                                   | Per-requirement issue                      |
+| Audit capture mechanism (Postgres trigger vs app hook vs both)                                                            | Per-requirement issue (Goal 1)             |
+| Audit table schema, retention semantics, lineage fields                                                                   | Per-requirement issue (Goal 1)             |
+| Failure classification taxonomy (exact enum values, how workers signal them)                                              | Per-requirement issue (Goal 1)             |
+| Operational read API shapes (`peek` / `findById` / `listActive` / `listStalled` / `getAttemptChain` / `getActiveWorkers`) | Per-requirement issue (Goal 2)             |
+| Progress storage location (`pgboss.job.output` vs sidecar table)                                                          | Per-requirement issue (Goal 3)             |
+| Retry-resume semantics, `previousOutput`, opt-in flags                                                                    | Per-requirement issue (Goal 3)             |
+| pg-boss / Postgres version matrix; exact stable/transitional/forbidden surface lists                                      | Per-requirement issue (Goal 4)             |
+| Distribution shape (single package, monorepo, separate Prisma adapter)                                                    | Per-requirement issue (Goal 5)             |
+| Reactive surface mechanism (in-process `EventEmitter` vs Postgres `LISTEN/NOTIFY` vs both)                                | Per-requirement issue (Goal 6)             |
+| Event schema (what events fire, what payload, persisted vs ephemeral)                                                     | Per-requirement issue (Goal 6)             |
+| Test coverage targets, performance budgets                                                                                | Operational, follows from success criteria |
 
 If a task touches one of these and there's no companion issue, open one (or ask the user to) before writing code.
 
@@ -93,6 +100,32 @@ If a task touches one of these and there's no companion issue, open one (or ask 
 - **Semantic Versioning** ([semver.org](https://semver.org/spec/v2.0.0/)) for releases. While on `0.x.y` the API is unstable — anything may break between minors. Promote to `1.0.0` only when the API surface is committed.
 - **Keep a Changelog** ([keepachangelog.com](https://keepachangelog.com/en/1.1.0/)) format in `CHANGELOG.md`. Every PR with user-visible changes adds an entry under `## [Unreleased]` using the standard sections (`Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`). Releases rename `[Unreleased]` to the dated version section and open a fresh `[Unreleased]`.
 - The `version` in `package.json` and the latest dated section in `CHANGELOG.md` must agree.
+
+## Branching, worktrees, and Git workflow
+
+Single-trunk model: `main` is the release branch (what gets published to npm). All other work lives on short-lived branches checked out via worktree. If/when the project grows into needing a separate integration branch (`develop`), we'll add it — for now KISS.
+
+**Default workflow (worktree per branch):**
+
+1. Create the worktree off `main` (run from the main checkout):
+   `git worktree add .worktrees/<branch-dir> -b <branch-name>`
+2. `cd` into the worktree and install: `npm install`
+3. Do the work in the worktree directory — small, logical commits as you go (schema → impl → wire-up → tests), not one giant commit at the end
+4. Verify in the worktree before merging back: `npm run lint && npm run build` (and tests once they exist)
+5. From the main checkout: `git checkout main && git merge --no-ff <branch-name>`
+6. **Version-on-merge.** Bump `package.json` version (minor for features, patch for fixes/refactors) and add the `CHANGELOG.md` entry in the **same commit as the code change** (or amend into the merge commit). Not a separate chore commit. The package.json↔CHANGELOG agreement rule from § Versioning and changelog still applies.
+7. Push: `git push`
+8. Clean up: `git worktree remove .worktrees/<branch-dir>` + `git branch -d <branch-name>`
+
+**Worktree directory:** `.worktrees/` in project root (gitignored). Directory names mirror the branch name with slashes replaced by hyphens.
+
+**Commit and merge rules:**
+
+- **Never squash.** Always `--no-ff` or plain `--merge`. Full commit history must be preserved.
+- **No `--rebase` merges** for the same reason — preserve the branch shape.
+- **Commit incrementally on feature branches.** Each commit should be a coherent unit of progress that a reviewer (or a future you) can read independently.
+
+**Exception (direct-on-main):** Only when the user explicitly asks ("just do this quickly on main", "skip the worktree"). Realistic cases: docs-only updates, the initial scaffolding. If in doubt, use a worktree.
 
 ## Language
 
@@ -124,10 +157,21 @@ Formatter (Prettier or alternative) is deferred — that's a separate decision w
 ## Build / test / run
 
 - **Install:** `npm install`
-- **Build:** `npm run build` — runs `tsc`, emits to `dist/` (gitignored)
-- **Test:** not yet established — test-runner choice (vitest / node:test / jest) is deferred until first feature lands
+- **Lint:** `npm run lint` — ESLint flat config (auto-fix: `npm run lint:fix`)
+- **Build:** `npm run build` — `tsc` emits to `dist/` (gitignored)
+- **Test:** not yet established — runner choice (vitest / node:test / jest) is deferred until first feature lands
+
+**Verify before claiming done.** Run `npm run lint && npm run build` (and tests once they exist) before reporting a task complete. Order mirrors a CI fail-fast pipeline: cheap checks first. If anything fails, report the actual output — don't suppress, don't simplify, don't claim success.
 
 Update this section when test tooling is added.
+
+## File guidelines
+
+- When reading files over 500 lines, use `Read`'s `offset` and `limit` to read in chunks. Don't assume a single read captured the whole file.
+- When renaming or changing a function / type / variable, search for: direct calls, type references, string literals containing the name, re-exports, barrel files, and test mocks. One grep is not enough.
+- Prefer files under 500–800 LOC; split files over 1000 LOC before making major changes.
+- Prefer functions under 100 lines; refactor functions over 200 lines before modifying.
+- Prioritize cohesion (one responsibility per file), clear boundaries, and readability over compactness.
 
 ## Related links
 
