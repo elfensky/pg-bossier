@@ -1,3 +1,5 @@
+> **Architecture update — 2026-05-20.** Issue #1 is agreed; the storage / capture / query architecture is settled in the [storage-architecture design](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md). Concrete target identified — the capture trigger's in-transaction overhead. This issue sets the numeric budget.
+
 ## Purpose
 
 Set the numeric per-event overhead budget that gives "stay close to pg-boss" (Goal 8) enforceable teeth. Without a number, the constraint in #1 is unenforceable.

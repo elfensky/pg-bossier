@@ -1,3 +1,5 @@
+> **Architecture update — 2026-05-20.** Issue #1 is agreed; the storage / capture / query architecture is settled in the [storage-architecture design](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md). Events can be emitted from the same capture points (the trigger and app-hook). This issue decides the mechanism and payload schema.
+
 ## Purpose
 
 Decide the publication mechanism and event payload schema for pg-bossier's lifecycle events. Consumers subscribe to job state transitions (`created` / `started` / `completed` / `failed` / `cancelled` / `retried` — mapped to pg-boss's actual six-state machine; `expired` / `superseded` are derived refinements in the payload, not separate event types) instead of polling.

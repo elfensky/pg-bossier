@@ -1,3 +1,5 @@
+> **Architecture update — 2026-05-20.** Issue #1 is agreed; the storage / capture / query architecture is settled in the [storage-architecture design](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md). Unaffected by the storage architecture — the `Job<TInput, TOutput>` type pattern is orthogonal to it.
+
 ## Purpose
 
 Decide how consumers parameterize types for their job payloads. Affects every method in Goal 5 that returns a `Job`, plus progress (Goal 6) and event payload (Goal 7) types.

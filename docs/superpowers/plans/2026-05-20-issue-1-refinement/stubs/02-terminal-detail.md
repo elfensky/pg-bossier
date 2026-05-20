@@ -1,3 +1,5 @@
+> **Architecture update — 2026-05-20.** Issue #1 is agreed; the storage / capture / query architecture is settled in the [storage-architecture design](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md). Storage is settled — `terminal_detail` is a column on `pgbossier.record`. This issue now decides only the discriminated-union shape and the app-hook write path.
+
 ## Purpose
 
 Decide the structure of `terminal_detail`, the worker signaling protocol for populating it, and the enforcement of the `class` field for failed jobs.

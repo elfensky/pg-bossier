@@ -1,3 +1,5 @@
+> **Architecture update — 2026-05-20.** Issue #1 is agreed; the storage / capture / query architecture is settled in the [storage-architecture design](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md). The install migration (schema + table + trigger + backfill) and uninstall (`DROP SCHEMA pgbossier CASCADE`) are specified in the [substrate spec](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-substrate-spec.md). This issue decides delivery — CLI vs programmatic vs SQL file — and distribution shape.
+
 ## Purpose
 
 Decide the install + uninstall surface — distribution shape, migration tooling, and Prisma coexistence — that delivers the <1hr-install / clean-uninstall promise.

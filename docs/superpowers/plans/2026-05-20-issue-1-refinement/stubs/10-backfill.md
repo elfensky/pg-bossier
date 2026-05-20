@@ -1,3 +1,5 @@
+> **Architecture update — 2026-05-20.** Issue #1 is agreed; the storage / capture / query architecture is settled in the [storage-architecture design](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md). Resolved in principle — backfill at install (see the [substrate spec](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-substrate-spec.md)). This issue decides only backfill performance: chunking, lock impact, throttling.
+
 ## Purpose
 
 Decide how the audit table populates when pg-bossier is installed on an existing pg-boss instance that already has millions of historical jobs. Affects Goal 1's adoption story for descent-app and similar consumers.

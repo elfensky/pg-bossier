@@ -1,3 +1,5 @@
+> **Architecture update — 2026-05-20.** Issue #1 is agreed; the storage / capture / query architecture is settled in the [storage-architecture design](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md). Retry history is `SELECT … ORDER BY attempt` over `pgbossier.record` — no link columns. This issue now decides only the `getRetryHistory` return shape and the dead-letter / supersession edge cases.
+
 ## Purpose
 
 Decide how a job's retry history is reconstructed and exposed. A job keeps a single stable `id` for its entire life: pg-boss's retry path (`failJobs`) is a `DELETE`+`INSERT` that **reuses the same id** (verified against pg-boss 12.18.2). Retry history is therefore not a chain of linked ids — it is the ordered sequence of row-versions of one id.

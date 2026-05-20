@@ -1,3 +1,5 @@
+> **Architecture update — 2026-05-20.** Issue #1 is agreed; the cross-cutting storage / capture / query architecture is settled in the [storage-architecture design](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md). This issue's full buildable design — the `pgbossier.record` DDL, the capture trigger, the install migration, and backfill — is specified in the [substrate spec](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-substrate-spec.md); implementation proceeds from there.
+
 ## Purpose
 
 Decide pg-bossier's forensic audit table schema and capture mechanism. The table preserves every pg-boss state change forever, surviving pg-boss's in-place row deletion — the `deletion_seconds`-driven `DELETE` and the `DELETE`+`INSERT` cycle pg-boss runs on every retry.

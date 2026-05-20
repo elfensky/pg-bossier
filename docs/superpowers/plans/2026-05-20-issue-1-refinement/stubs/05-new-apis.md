@@ -1,3 +1,5 @@
+> **Architecture update — 2026-05-20.** Issue #1 is agreed; the storage / capture / query architecture is settled in the [storage-architecture design](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md). Reads are single-source (`pgbossier.record`). This issue decides the read-method signatures and adds a `search()` method across the JSONB columns.
+
 ## Purpose
 
 Decide the exact signatures, return types, and surface of pg-bossier's new operational read methods. These replace the raw SQL queries descent-app currently runs against `pgboss.*`.
