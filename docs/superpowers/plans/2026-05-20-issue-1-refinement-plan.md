@@ -30,7 +30,7 @@
 | `docs/superpowers/plans/2026-05-20-issue-1-refinement/stubs/10-backfill.md` | Created | Stub body for cross-cutting sub-issue |
 | `docs/superpowers/plans/2026-05-20-issue-1-refinement/stubs/11-performance-budget.md` | Created | Stub body for cross-cutting sub-issue |
 | `docs/superpowers/plans/2026-05-20-issue-1-refinement/stubs/12-ts-generics.md` | Created | Stub body for cross-cutting sub-issue |
-| `CLAUDE.md` | Modified | Updated to reflect the 9-goal structure, 4 constraints, and sub-issue references |
+| `CLAUDE.md` | Modified | Updated to reflect the 9-goal structure, 3 constraints, and sub-issue references |
 
 ---
 
@@ -340,7 +340,7 @@ Confirm or revise:
 
 1. The **9-goal list** — anything missing, anything to remove?
 2. The **non-goals list** — anything we should explicitly rule in or out?
-3. The **4 constraints** — particularly the API-shape principle (overload vs new methods) and fail-open audit writes.
+3. The **3 constraints** — particularly the API-shape principle (overload vs new methods) and fail-open audit writes.
 4. The **audience definition** — is descent-app the right primary, with OSS deferred?
 5. The **success criteria** — are these the right five, or are we measuring the wrong things?
 
@@ -382,7 +382,7 @@ Write the following content to `docs/superpowers/plans/2026-05-20-issue-1-refine
 ````markdown
 ## Refinement: structure update — 2026-05-20
 
-This issue has been refined to a clearer 9-goal structure, four explicit constraints, and a 12-sub-issue split for per-feature implementation. The full reasoning — diagnostic of the prior framing, the orthogonality decisions, the rename history, and the verification of pg-boss's actual behavior — lives in the committed design doc:
+This issue has been refined to a clearer 9-goal structure, three explicit constraints, and a 12-sub-issue split for per-feature implementation. The full reasoning — diagnostic of the prior framing, the orthogonality decisions, the rename history, and the verification of pg-boss's actual behavior — lives in the committed design doc:
 
 📄 [Design doc: `docs/superpowers/specs/2026-05-19-issue-1-refinement-design.md`](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-19-issue-1-refinement-design.md)
 
@@ -1092,7 +1092,7 @@ Expected: 25+ lines.
 **Files:**
 - Modify: `CLAUDE.md`
 
-The current `CLAUDE.md` has a goal list reflecting the *prior* framing. Update the relevant sections to match the refined 9-goal structure, four constraints, and 12-sub-issue split.
+The current `CLAUDE.md` has a goal list reflecting the *prior* framing. Update the relevant sections to match the refined 9-goal structure, three constraints, and 12-sub-issue split.
 
 - [ ] **Step 1: Read the current `CLAUDE.md`**
 
@@ -1296,14 +1296,14 @@ Expected: the four paths above are staged. Other untracked files (`.gitignore`, 
 Run:
 ```bash
 git commit -m "$(cat <<'EOF'
-docs: refine issue #1 — restructure to 9 goals + 4 constraints + 12 sub-issues
+docs: refine issue #1 — restructure to 9 goals + 3 constraints + 12 sub-issues
 
 Applies the design from docs/superpowers/specs/2026-05-19-issue-1-refinement-design.md.
 
 Changes:
 - Add design doc capturing the diagnostic, decisions, and rationale
 - Add implementation plan with staged drafts for issue #1 body, 12 sub-issue stubs, and summary comment
-- Update CLAUDE.md to reflect the refined 9-goal structure, 4 constraints, and sub-issue list
+- Update CLAUDE.md to reflect the refined 9-goal structure, 3 constraints, and sub-issue list
 
 Headline structural changes:
 - Goal 1 (audit table) split from prior 'operational data plane' bundle

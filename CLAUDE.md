@@ -17,12 +17,17 @@ The canonical scope document is **[issue #1](https://github.com/elfensky/pg-boss
 
 ## What pg-bossier is
 
-A **JS/TS library that layers on top of [pg-boss](https://github.com/timgit/pg-boss)** to provide an **operational data plane** — capabilities pg-boss has explicitly declined to take on:
+A **JS/TS library that layers on top of [pg-boss](https://github.com/timgit/pg-boss)** to provide an **operational data plane** — capabilities pg-boss has explicitly declined to take on. Nine concrete goals:
 
-- **Forensic preservation with lineage and failure classification.** Every job preserved forever (surviving pg-boss's archive→delete cleanup), with typed failure semantics (transient / non-retryable / cancelled / expired / superseded) and explicit lineage links between retries, reschedules, and singleton supersessions. "Why did job X produce result Y?" answerable with one typed query, not by string-matching error text.
-- **Operational query API.** Live and historical reads through typed methods — not just status counts, but operational shapes like `peek` / `findById` / `listActive` / `listStalled` / `getAttemptChain` / `getActiveWorkers`. Consumers never drop to `$queryRaw` for debugging or operations.
-- **Mid-flight progress that survives retries.** Long-running jobs persist progress (not just emit it) so it survives worker crashes and pg-boss's DELETE+re-INSERT retry path.
-- **Reactive surface.** Every job state transition lands as a queryable row _and_ is published to an in-process emitter. Consumers wire to events, not 5-second polling loops. Same substrate is what consumer-owned OpenTelemetry exporters build on (we don't ship those).
+1. **Permanent job history.** `pgbossier.job_audit` populated automatically, surviving pg-boss's in-place row deletion (the `deletion_seconds` `DELETE` and the retry `DELETE`+`INSERT`).
+2. **Typed terminal-state detail.** `terminal_state` (pg-boss's three terminal values — `completed` / `cancelled` / `failed`) + `terminal_detail` (JSONB discriminated by state; `class` mandated when `failed`; `expired` / `superseded` are pg-bossier-derived markers, not pg-boss states). One typed read answers "why did this fail?" without string-matching error text.
+3. **Retry history tracking.** Parent/successor links across retries, reschedules, singleton supersession. `getRetryHistory(jobId)` walks the chain.
+4. **Optional input-snapshot capture.** Opt-in JSONB slot for consumer-supplied "what data did this job see" manifests. Pg-bossier preserves; consumers define shape.
+5. **New APIs.** Operational read methods (`peek` / `findById` / `listActive` / `listStalled` / `getRetryHistory` / `getActiveWorkers` / state-counts). pg-boss 12 partially covers some (`findJobs` / `getQueueStats` / `getWipData`) — the Goal 5 sub-issue names each method's differentiator. Write extensions for Goals 2/4/6 are deferred per-feature per the API-shape principle.
+6. **Persistent job progress.** One mechanism that survives DELETE+re-INSERT. Two usage patterns from the same slot: resumable (position) and non-resumable (display). Worker decides whether to use the persisted value on retry.
+7. **Lifecycle event API.** Event emission on every state transition (in-process EventEmitter and/or `LISTEN/NOTIFY` on `pgbossier_*` channels). Maps to pg-boss#570 (declined upstream). Distinct from pg-boss's "pub/sub" feature (which is queue fan-out, not real-time events).
+8. **pg-boss compatibility tier system.** Stable / Transitional / Forbidden classification + CI matrix.
+9. **One-step install, symmetric uninstall.** One dependency + one migration + `DROP SCHEMA pgbossier CASCADE` for clean removal.
 
 pg-boss stays an **unmodified npm dependency** — pg-bossier extends it, never replaces it.
 
@@ -30,25 +35,35 @@ pg-boss stays an **unmodified npm dependency** — pg-bossier extends it, never 
 
 From issue #1. These are not up for casual revisiting inside an implementation PR — if a task feels like it crosses one of these lines, surface that explicitly:
 
+### Non-goals
+
 - **No UI / dashboard.** Data plane only; consumers build their own UIs. pg-boss now ships its own dashboard — we don't compete.
 - **No HTTP/REST layer.** JS API only.
 - **No fork of pg-boss.** Use it as a dependency, don't patch its source.
 - **Don't replace pg-boss queue ops** (`send` / `fetch` / `complete` / `fail` / `work` / `touch`). Extend, never replace.
-- **Don't add scheduling.** pg-boss handles cron / scheduled jobs. Sub-minute scheduling ([pg-boss#427](https://github.com/timgit/pg-boss/issues/427)) stays a pg-boss concern.
-- **Not a workflow engine.** No job dependencies, no DAGs, no fan-out/fan-in primitives ([pg-boss#745](https://github.com/timgit/pg-boss/issues/745)). That's Inngest / Temporal / BullMQ-Flow territory.
-- **Not a queue runtime mutator (in v1).** No pause/resume, no force-delete, no concurrency control mid-flight ([pg-boss#551](https://github.com/timgit/pg-boss/issues/551), [#659](https://github.com/timgit/pg-boss/issues/659)). Pause/resume is reserved for a possible v0.2 revisit if a concrete consumer scenario materializes (descent-app's Space-Track rate-limiting is the candidate trigger).
-- **Not an observability platform.** OpenTelemetry exporters are the consumer's responsibility, built on top of the Goal 6 event substrate. We don't ship spans, metrics, or exporters.
-- **Not a testing harness.** pg-boss ships its own testability hooks ([pg-boss#643](https://github.com/timgit/pg-boss/issues/643)); we don't reimplement them.
+- **Don't add scheduling.** pg-boss handles cron / scheduled jobs.
+- **Not a workflow engine.** No DAGs, fan-out/fan-in primitives.
+- **Not a queue runtime mutator (in v1).** No pause/resume, no force-delete, no concurrency control mid-flight. Pause/resume reserved for a possible v0.2 if descent-app's Space-Track rate-limiting concretely surfaces the need.
+- **Not an observability platform.** OpenTelemetry exporters are the consumer's responsibility, built on top of Goal 7's event substrate.
+- **Not a testing harness.** pg-boss ships its own testability hooks.
+- **Not introspecting handler behavior.** Goal 4's input-snapshot slot is for _consumer-supplied_ data only.
 - **Don't become an ORM.** Should work alongside Prisma without depending on it.
-- **Symmetric drop-in.** Adding pg-bossier = one dependency + one migration. Removing it = `DROP SCHEMA pgbossier CASCADE` + uninstall the package. No orphaned tables, no halfway-removed state.
+- **No bounded retention tooling.** pg-bossier writes to its audit table forever; retention is consumer-owned.
+- **Symmetric drop-in.** Adding pg-bossier = one dependency + one migration. Removing it = `DROP SCHEMA pgbossier CASCADE` + uninstall the package.
 - **No upstream PR campaign.** We're not trying to land these features in pg-boss itself.
+
+### Constraints (load-bearing rules every implementation must respect)
+
+- **Audit writes are fail-open.** pg-bossier failures never block pg-boss operations. Default: log and continue.
+- **Per-event overhead has a published budget.** Decided in the cross-cutting performance-budget sub-issue. Exceeding the budget blocks release.
+- **API-shape principle: composition, not replacement.** Read methods (Goal 5) are always new pg-bossier methods, not overloads of pg-boss methods. Write extensions (Goals 2, 4, 6) prototype both (a) overload pg-boss method via new options and (b) new sibling pg-bossier method, then document the trade-off and pick one per feature.
 
 ## pg-boss compatibility contract
 
-Goal 4 from issue #1 names _which_ pg-boss surfaces we depend on, and under what stability assumption. "Stay close to pg-boss" is meaningless without naming the parts:
+Goal 8 from issue #1 names _which_ pg-boss surfaces we depend on, and under what stability assumption. "Stay close to pg-boss" is meaningless without naming the parts:
 
 - **Stable (we depend, treat as contract).** pg-boss's documented public JS API — the methods consumers already call (`send`, `fetch`, `complete`, `fail`, `work`, `touch`, etc.). Upstream breakage here is a major-version concern, both for pg-boss and by extension for us.
-- **Transitional (we depend, tested per supported pg-boss version).** Reads against `pgboss.job` and `pgboss.archive` schemas. Tracked in the CI matrix; expect to update bindings on pg-boss minor bumps without that itself being a pg-bossier breaking change.
+- **Transitional (we depend, tested per supported pg-boss version).** Reads against the `pgboss.job` table (pg-boss 12 has no `archive` table — job rows are deleted in place by `deletion_seconds`). Tracked in the CI matrix; expect to update bindings on pg-boss minor bumps without that itself being a pg-bossier breaking change.
 - **Forbidden (never depend on).** pg-boss internals — private SQL, helper modules, undocumented events, any `node_modules/pg-boss/src/*` reach-ins. If an implementation feels like it needs one of these, that's the signal to either find a public-API path or open an issue questioning the requirement.
 
 When adding a feature, name explicitly which tier each pg-boss surface used falls into. If a surface doesn't fit Stable or Transitional, it's Forbidden — no exceptions inside an implementation PR.
@@ -68,30 +83,36 @@ Optimize for this shape first. Generalization to broader OSS consumers is a post
 ## Success criteria (from issue #1)
 
 1. descent-app's raw-SQL count against `pgboss.*` drops to zero (or to a documented short list with stated reasons).
-2. "What happened to job X six months ago?" is answerable with one typed query — including inputs, final output, failure class, full retry chain, and worker context — even after pg-boss has deleted the job from its own archive.
+2. "What happened to job X six months ago?" is answerable with one typed query — including inputs, final output, failure class, full retry history, and worker context — even after pg-boss has deleted the job row from `pgboss.job`.
 3. Consumers wire to job events, not timers. No production consumer of pg-bossier runs a polling loop against the query API to detect state changes.
 4. Adoption on an existing pg-boss install takes under an hour: install package, run one migration, swap imports where extended APIs are needed.
 5. pg-boss minor releases are supported within ~2 weeks of upstream publication, verified by a passing CI matrix.
 
 ## What's deliberately undecided
 
-Issue #1 explicitly defers the following — each must be opened as its own issue **before** implementation, not chosen ad-hoc inside another PR:
+Each decision below is its own GitHub issue. Sub-issues opened during the issue #1 refinement:
 
-| Decision                                                                                                                  | Status                                     |
-| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| Strategic approach (fork vs layer vs upstream)                                                                            | Deferred to a separate issue               |
-| Method signatures for query / progress / audit / events                                                                   | Per-requirement issue                      |
-| Audit capture mechanism (Postgres trigger vs app hook vs both)                                                            | Per-requirement issue (Goal 1)             |
-| Audit table schema, retention semantics, lineage fields                                                                   | Per-requirement issue (Goal 1)             |
-| Failure classification taxonomy (exact enum values, how workers signal them)                                              | Per-requirement issue (Goal 1)             |
-| Operational read API shapes (`peek` / `findById` / `listActive` / `listStalled` / `getAttemptChain` / `getActiveWorkers`) | Per-requirement issue (Goal 2)             |
-| Progress storage location (`pgboss.job.output` vs sidecar table)                                                          | Per-requirement issue (Goal 3)             |
-| Retry-resume semantics, `previousOutput`, opt-in flags                                                                    | Per-requirement issue (Goal 3)             |
-| pg-boss / Postgres version matrix; exact stable/transitional/forbidden surface lists                                      | Per-requirement issue (Goal 4)             |
-| Distribution shape (single package, monorepo, separate Prisma adapter)                                                    | Per-requirement issue (Goal 5)             |
-| Reactive surface mechanism (in-process `EventEmitter` vs Postgres `LISTEN/NOTIFY` vs both)                                | Per-requirement issue (Goal 6)             |
-| Event schema (what events fire, what payload, persisted vs ephemeral)                                                     | Per-requirement issue (Goal 6)             |
-| Test coverage targets, performance budgets                                                                                | Operational, follows from success criteria |
+**Goal implementation issues (one per goal):**
+
+| Sub-issue                                                                            | Goal   |
+| ------------------------------------------------------------------------------------- | ------ |
+| Forensic audit table — schema, capture mechanism, write semantics                     | Goal 1 |
+| Terminal-state detail — discriminated-union shape, worker signaling, `class` mandate   | Goal 2 |
+| Retry history columns — parent/successor links, supersession semantics                | Goal 3 |
+| Input-snapshot slot — opt-in JSONB column, consumer-defined shape                      | Goal 4 |
+| New APIs — operational read method signatures, TS generics surface                    | Goal 5 |
+| Persistent progress API — storage location, retry-survival semantics                  | Goal 6 |
+| Lifecycle event API — mechanism (emitter vs LISTEN/NOTIFY), payload schema             | Goal 7 |
+| pg-boss compatibility tier doc + CI matrix definition                                 | Goal 8 |
+| Install/uninstall surface — migration tooling, distribution shape                      | Goal 9 |
+
+**Cross-cutting issues:**
+
+| Sub-issue                                                    | Reason                                        |
+| ------------------------------------------------------------ | --------------------------------------------- |
+| Backfill strategy for existing installs                      | Affects Goal 1 implementation                 |
+| Performance budget — numeric per-event overhead target       | Gives Goal 8's "stay close" enforceable teeth |
+| TypeScript generics surface — `Job<TInput, TOutput>` pattern | Most affects Goal 5; also Goal 6/7            |
 
 If a task touches one of these and there's no companion issue, open one (or ask the user to) before writing code.
 
@@ -131,7 +152,7 @@ Single-trunk model: `main` is the release branch (what gets published to npm). A
 
 **TypeScript with `strict` mode**, ESM output, `.d.ts` declarations shipped. This is a deliberate choice rather than a default, and the reasoning matters because TypeScript wouldn't be an obvious pick for every project:
 
-- **Goal #2 from issue #1 makes the language choice load-bearing, not stylistic.** "Typed query API" isn't a preference — it's a stated success criterion. The primary consumer (descent-app, Prisma) expects autocomplete on job payloads and generics like `Job<TInput, TOutput>` for forensic queries. Shipping that surface from plain JS would require either drift-prone hand-maintained `.d.ts` files or JSDoc + `// @ts-check` (which gets awkward for library generics and still needs TS tooling to verify).
+- **Goal 5 from issue #1 makes the language choice load-bearing, not stylistic.** A typed query API isn't a preference — it's a stated success criterion. The primary consumer (descent-app, Prisma) expects autocomplete on job payloads and generics like `Job<TInput, TOutput>` for forensic queries. Shipping that surface from plain JS would require either drift-prone hand-maintained `.d.ts` files or JSDoc + `// @ts-check` (which gets awkward for library generics and still needs TS tooling to verify).
 - **Libraries have the inverse TS cost/benefit profile of applications.** A library has a small, slowly-changing public API consumed by many callers — types pay off N times per change. Application code has a sprawling, fast-changing internal surface consumed once. "Avoid TS by default" is a defensible stance for apps; pg-bossier sits on the opposite end of that curve.
 - **`noUncheckedIndexedAccess: true`** is enabled on top of `strict`. Query-result handling and `pgboss.job.output` JSONB access are exactly the patterns where forcing `T | undefined` on indexed lookups catches real bugs.
 - **ESM** (`"type": "module"`, `module: "NodeNext"`) is the right 2026 default for a new library targeting Node 18+ and a Prisma-using consumer base. CJS-only would create import friction for the v1 consumer.
