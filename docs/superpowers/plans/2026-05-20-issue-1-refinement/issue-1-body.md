@@ -199,23 +199,18 @@ Each is its own issue, scoped by the agreement reached here.
 
 ---
 
-## Decision needed in this issue
+## Status
 
-Confirm or revise:
+**Agreed — 2026-05-20.** The nine goals, the non-goals, the three constraints, the audience, and the success criteria above are the ratified rubric. Every implementation issue (the sub-issues below) is evaluated against them. This charter changes only by editing this issue — never ad-hoc inside an implementation PR.
 
-1. The **9-goal list** — anything missing, anything to remove?
-2. The **non-goals list** — anything we should explicitly rule in or out?
-3. The **3 constraints** — particularly the API-shape principle (overload vs new methods) and fail-open audit writes.
-4. The **audience definition** — is descent-app the right primary, with OSS deferred?
-5. The **success criteria** — are these the right five, or are we measuring the wrong things?
-
-Once confirmed, this issue becomes the rubric against which every implementation issue is evaluated.
+The cross-cutting storage / capture / query architecture beneath Goals 1–7 is settled in the storage-architecture design — see Related.
 
 ---
 
 ## Related
 
-- Design doc capturing the refinement reasoning: [`docs/superpowers/specs/2026-05-19-issue-1-refinement-design.md`](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-19-issue-1-refinement-design.md)
+- Refinement reasoning: [`docs/superpowers/specs/2026-05-19-issue-1-refinement-design.md`](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-19-issue-1-refinement-design.md)
+- Storage / capture / query architecture: [`docs/superpowers/specs/2026-05-20-storage-architecture-design.md`](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md)
 - [drunikbe/descent-app#342](https://github.com/drunikbe/descent-app/issues/342) — JobProgress fallback approach in the consumer
 - [drunikbe/descent-app#343](https://github.com/drunikbe/descent-app/issues/343) — descent-app tracking issue for raw-SQL removal
 
