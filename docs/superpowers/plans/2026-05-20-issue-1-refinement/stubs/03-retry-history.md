@@ -1,30 +1,30 @@
 ## Purpose
 
-Decide the column shapes that link related job attempts (retries, reschedules, singleton supersession) into a reconstructable history. This enables `getRetryHistory(jobId)` to walk the chain across pg-boss's DELETE+INSERT retry path.
+Decide how a job's retry history is reconstructed and exposed. A job keeps a single stable `id` for its entire life: pg-boss's retry path (`failJobs`) is a `DELETE`+`INSERT` that **reuses the same id** (verified against pg-boss 12.18.2). Retry history is therefore not a chain of linked ids — it is the ordered sequence of row-versions of one id.
 
 ## Parent
 
 Sub-issue of #1 (Goal 3 — Retry history tracking).
 
+## Corrected model (verified against pg-boss 12.18.2)
+
+- A job's `id` is stable from creation through every retry to its terminal state.
+- Each attempt is a row-version of that id; pg-boss's `retry_count` (0, 1, 2, …) orders them.
+- pg-boss destroys the prior attempt's row on each retry (`failJobs` = `DELETE` + `INSERT` with the same id), so per-attempt history exists only if pg-bossier captures each row-version before pg-boss discards it — that capture is the `pgbossier.job_chronicle` table (Goal 1 / #2).
+- There are **no parent/successor link columns**. Retry history is `SELECT * FROM pgbossier.job_chronicle WHERE job_id = $1 ORDER BY attempt`.
+
 ## Decisions to make
 
-- **Link columns.** Names, types, nullability. Candidates:
-  - `parent_attempt_id` UUID — immediately previous attempt, NULL for first
-  - `root_job_id` UUID — original job in the chain, self-referential for first
-  - `superseded_by_job_id` UUID — set on the older row when singleton supersession occurs
-- **Population rules.** When pg-boss retries, pg-bossier's capture hook must read the previous row and set `parent_attempt_id` / inherit `root_job_id`. Confirm the hook timing (pre-INSERT vs post-INSERT trigger semantics; or app-side wrap).
-- **Supersession semantics.** When a singleton job is replaced, what happens to the older row?
-  - Mark with `superseded_by_job_id`, leave state as-is (e.g., `created`)?
-  - Or set `terminal_state = 'superseded'` and add `terminal_detail.supersededByJobId`?
-  - Trade-off: redundancy vs missing-information when only one is populated.
-- **Reconstruction query.** Recursive CTE walking `parent_attempt_id` to root. Confirm performance characteristics with realistic data sizes (a job with 10 retries shouldn't trigger a table scan).
-- **`getRetryHistory(jobId)` return shape.** Array of audit rows? Tree structure? Time-ordered list? (Affects Goal 5 method-signature decision.)
+- **`getRetryHistory(jobId)` return shape.** A time-ordered array of attempt records (each = one chronicle row). Confirm the field set returned per attempt.
+- **Dead-letter lineage.** Dead-lettering is the *one* case that produces a genuinely new `id` — pg-boss `INSERT`s a fresh job into the dead-letter queue with a new id and records no link back to the source. Decide whether pg-bossier records a `dead_letter_source_id` link or treats the DLQ job as unrelated.
+- **Singleton supersession.** When a singleton job is displaced by a newer job, decide how the relationship is represented — a marker in `terminal_detail` (see Goal 2 / #3), an explicit link, or nothing.
+- **Reschedule.** Confirm whether reschedules need distinct representation or are simply ordinary row-versions of the same id.
 
 ## Out of scope
 
-- The audit table itself (Goal 1).
-- `terminal_detail.supersededByJobId` shape (Goal 2 sub-issue, if we go that route).
-- Worker identity tracking across retries (Goal 5 / `getActiveWorkers` sub-issue).
+- The `pgbossier.job_chronicle` table schema and capture mechanism (Goal 1 / #2).
+- The `terminal_detail` shape (Goal 2 / #3).
+- Worker identity tracking (Goal 5 / `getActiveWorkers`).
 
 ## Blocked by
 

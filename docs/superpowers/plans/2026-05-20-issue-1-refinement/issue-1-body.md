@@ -64,9 +64,9 @@ Each goal lists **what we ship**, **what consumers get**, and **what counts as d
 
 ### Goal 3 — Retry history tracking
 
-- **Ships:** parent/successor link columns on audit rows, populated for retries, reschedules, and singleton supersession. "Retry history" names the 80% case; the data also covers reschedules and singleton supersession.
-- **Benefit:** full retry-and-supersession history reconstructable from the audit table alone.
-- **Done when:** `getRetryHistory(jobId)` returns the complete history for any in-scope job (retries, reschedules, supersession links).
+- **Ships:** every attempt of a job preserved as a distinct record, reconstructable into the job's full retry history. A job keeps one stable `id` across all retries — pg-boss's retry path reuses the id through its `DELETE`+`INSERT` cycle (verified against pg-boss 12.18.2) — so "retry history" is the ordered sequence of that id's attempts, not a chain of linked ids.
+- **Benefit:** full retry history reconstructable from pg-bossier's records alone, including the per-attempt rows pg-boss has already destroyed.
+- **Done when:** `getRetryHistory(jobId)` returns the complete ordered attempt history for any in-scope job.
 - **Distinct from data lineage / provenance** — see Goal 4 for that slot.
 
 ### Goal 4 — Optional input-snapshot capture
