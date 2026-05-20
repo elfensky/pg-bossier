@@ -28,10 +28,20 @@ This issue has been refined to a clearer 9-goal structure, three explicit constr
 
 Per-goal implementation (9):
 
-- STUB_NUMBERS_HERE
+- #2 — Goal 1 — Forensic audit table
+- #3 — Goal 2 — Terminal-state detail
+- #4 — Goal 3 — Retry history columns
+- #5 — Goal 4 — Input-snapshot slot
+- #6 — Goal 5 — New APIs
+- #7 — Goal 6 — Persistent progress API
+- #8 — Goal 7 — Lifecycle event API
+- #9 — Goal 8 — pg-boss compatibility tier
+- #10 — Goal 9 — Install/uninstall surface
 
 Cross-cutting (3):
 
-- STUB_NUMBERS_HERE
+- #11 — Backfill strategy for existing installs
+- #12 — Performance budget — numeric per-event overhead target
+- #13 — TypeScript generics surface
 
 Each sub-issue references this issue as its rubric. Per the original framing: anything not justifiable against the goals / non-goals here gets closed with a reference to this issue.
