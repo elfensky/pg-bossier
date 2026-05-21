@@ -12,13 +12,13 @@ Every pg-bossier change that touches a pg-boss surface must place that surface i
 | **Transitional** | Surfaces below the public API — chiefly the shape of the `pgboss.job` table. We depend on these, but re-verify them against each supported pg-boss version. Updating a binding on a pg-boss minor bump is *not* itself a pg-bossier breaking change. |
 | **Forbidden** | pg-boss internals — private SQL, helper modules, undocumented events, anything under `node_modules/pg-boss/src/`. Never depended on. Needing one is the signal to find a public-API path, or to question the requirement. |
 
-## What v0.1.0 depends on
+## What pg-bossier depends on today
 
 pg-boss is pinned as a peer dependency at `^12.18.2`.
 
 ### Stable
 
-- **The `PgBoss` class.** `src/client.ts` imports it as a type only; the substrate's runtime makes no pg-boss method calls of its own.
+- **The `PgBoss` class.** `src/client.ts` imports it as a type only; pg-bossier's runtime makes no pg-boss method calls of its own.
 - **pg-boss's public queue API, as exercised by the integration suite:** `new PgBoss()`, `start`, `stop`, `createQueue`, `send`, `fetch`, `complete`, `fail`, `cancel`, `touch`. These are the methods consumers already call; pg-bossier composes with them and never overrides them.
 
 ### Transitional
@@ -34,7 +34,7 @@ pg-boss 12 has **no `pgboss.archive` table**; finished job rows are deleted in p
 - pg-boss internal tables (schema-version bookkeeping, maintenance state) — never read.
 - Undocumented pg-boss events and private SQL — never depended on.
 
-v0.1.0 reaches into none of these.
+pg-bossier reaches into none of these.
 
 ## Still open (issue [#9](https://github.com/elfensky/pg-bossier/issues/9))
 

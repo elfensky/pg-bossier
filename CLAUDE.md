@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Pre-release (`0.0.0`) — nothing published yet.** The shared storage substrate (PR #15) is in place: the `pgbossier.record` chronicle table, the `pgbossier_capture` trigger on `pgboss.job`, idempotent `install()` / `uninstall()`, the `bossier({ boss, pool })` client with `recordPatch()`, and a `vitest` + `@testcontainers/postgresql` integration suite — plus GitHub Actions CI, the `exports` / `files` / `prepare` packaging that makes `pg-bossier` importable and publishable, a `COMPATIBILITY.md` pg-boss tier doc, and a deterministic test harness. `src/` is real code — `sql.ts` (DDL), `install.ts`, `record.ts`, `client.ts`, `read.ts`, `index.ts` (public API). Two goals are delivered on top of the substrate: **Goal 1** (forensic audit table) and **Goal 5** (the operational read API — `findById` / `getRetryHistory` / `listJobs` / `latestPerQueue` / `countByState` / `countByQueue` / `listLongRunning` on the `bossier` client, PR #17). The other goals are at varying stages — see issue #1's "Implementation progress" section for the authoritative per-goal status. The version stays `0.0.0` on `develop` until the first release (the first `develop` → `main` squash). Don't invent architecture answers; check open issues first and ask if a decision hasn't been made.
+**Pre-release (`0.0.0`) — nothing published yet.** The shared storage substrate (PR #15) is in place: the `pgbossier.record` chronicle table, the `pgbossier_capture` trigger on `pgboss.job`, idempotent `install()` / `uninstall()`, the `bossier({ boss, pool })` client with `recordPatch()`, and a `vitest` + `@testcontainers/postgresql` integration suite — plus GitHub Actions CI, the `exports` / `files` / `prepare` packaging that makes `pg-bossier` importable and publishable, a `COMPATIBILITY.md` pg-boss tier doc, and a deterministic test harness. `src/` is real code — `sql.ts` (DDL), `install.ts`, `record.ts`, `client.ts`, `read.ts`, `index.ts` (public API). **Goal 1** (the forensic audit table) is delivered — issue #2 closed. **Goal 5**'s operational read API — `findById` / `getRetryHistory` / `listJobs` / `latestPerQueue` / `countByState` / `countByQueue` / `listLongRunning` on the `bossier` client — merged via PR #17, though its issue #6 stays open. The other goals are at varying stages — see issue #1's "Implementation progress" section for the authoritative per-goal status. The version stays `0.0.0` on `develop` until the first release (the first `develop` → `main` squash). Don't invent architecture answers; check open issues first and ask if a decision hasn't been made.
 
 The canonical scope document is **[issue #1](https://github.com/elfensky/pg-bossier/issues/1)** ("Requirements: what pg-bossier should achieve"). Treat it as the rubric — any feature, refactor, or design choice must be justifiable against the goals and non-goals it lists. Issue #1 itself explicitly notes: "Anything not explicitly in scope is out — feature requests outside this boundary get closed with a reference to this issue."
 
@@ -19,11 +19,11 @@ The canonical scope document is **[issue #1](https://github.com/elfensky/pg-boss
 
 A **JS/TS library that layers on top of [pg-boss](https://github.com/timgit/pg-boss)** to provide an **operational data plane** — capabilities pg-boss has explicitly declined to take on. Nine concrete goals:
 
-1. **Permanent job history.** `pgbossier.record` populated automatically, surviving pg-boss's in-place row deletion (the `deletion_seconds` `DELETE` and the retry `DELETE`+`INSERT`). **Shipped in v0.1.0.**
+1. **Permanent job history.** `pgbossier.record` populated automatically, surviving pg-boss's in-place row deletion (the `deletion_seconds` `DELETE` and the retry `DELETE`+`INSERT`). **Delivered.**
 2. **Typed terminal-state detail.** `terminal_state` (pg-boss's three terminal values — `completed` / `cancelled` / `failed`) + `terminal_detail` (JSONB discriminated by state; `class` mandated when `failed`; `expired` / `superseded` are pg-bossier-derived markers, not pg-boss states). One typed read answers "why did this fail?" without string-matching error text.
 3. **Retry history tracking.** A job keeps one stable `id` across all retries (pg-boss reuses it through the retry `DELETE`+`INSERT`); each attempt is a preserved row-version. `getRetryHistory(jobId)` returns the ordered attempt sequence — no link columns.
 4. **Optional input-snapshot capture.** Opt-in JSONB slot for consumer-supplied "what data did this job see" manifests. Pg-bossier preserves; consumers define shape.
-5. **New APIs.** Operational read methods (`peek` / `findById` / `listActive` / `listStalled` / `getRetryHistory` / state-counts). pg-boss 12 partially covers some (`findJobs` / `getQueueStats` / `getWipData`) — the Goal 5 sub-issue names each method's differentiator. Write extensions for Goals 2/4/6 are deferred per-feature per the API-shape principle.
+5. **New APIs.** Operational read methods (`peek` / `findById` / `listActive` / `listStalled` / `getRetryHistory` / state-counts). pg-boss 12 partially covers some (`findJobs` / `getQueueStats` / `getWipData`) — the Goal 5 sub-issue names each method's differentiator. Write extensions for Goals 2/4/6 are deferred per-feature per the API-shape principle. **The operational read API merged via PR #17; issue #6 stays open.**
 6. **Persistent job progress.** One mechanism that survives DELETE+re-INSERT. Two usage patterns from the same slot: resumable (position) and non-resumable (display). Worker decides whether to use the persisted value on retry.
 7. **Lifecycle event API.** Event emission on every state transition (in-process EventEmitter and/or `LISTEN/NOTIFY` on `pgbossier_*` channels). Maps to pg-boss#570 (declined upstream). Distinct from pg-boss's "pub/sub" feature (which is queue fan-out, not real-time events).
 8. **pg-boss compatibility tier system.** Stable / Transitional / Forbidden classification + CI matrix.
@@ -90,7 +90,7 @@ Optimize for this shape first. Generalization to broader OSS consumers is a post
 
 ## What's deliberately undecided
 
-Each decision below is its own GitHub issue. Sub-issues opened during the issue #1 refinement. **Goal 1's issue ([#2](https://github.com/elfensky/pg-bossier/issues/2)) is closed — delivered by the v0.1.0 substrate;** the rest stay open and were re-scoped on 2026-05-21 to reflect what the substrate settled.
+Each decision below is its own GitHub issue. Sub-issues opened during the issue #1 refinement. **Goal 1's issue ([#2](https://github.com/elfensky/pg-bossier/issues/2)) is closed — delivered by the storage substrate;** the rest stay open and were re-scoped on 2026-05-21 to reflect what the substrate settled. Goal 5's operational read API has since merged (PR #17), though its issue [#6](https://github.com/elfensky/pg-bossier/issues/6) stays open.
 
 **Goal implementation issues (one per goal):**
 
@@ -100,7 +100,7 @@ Each decision below is its own GitHub issue. Sub-issues opened during the issue 
 | Terminal-state detail — discriminated-union shape, worker signaling, `class` mandate   | Goal 2 |
 | Retry history columns — parent/successor links, supersession semantics                | Goal 3 |
 | Input-snapshot slot — opt-in JSONB column, consumer-defined shape                      | Goal 4 |
-| New APIs — operational read method signatures, TS generics surface                    | Goal 5 |
+| New APIs — operational read method signatures, TS generics surface _(read API merged — PR #17; #6 open)_ | Goal 5 |
 | Persistent progress API — storage location, retry-survival semantics                  | Goal 6 |
 | Lifecycle event API — mechanism (emitter vs LISTEN/NOTIFY), payload schema             | Goal 7 |
 | pg-boss compatibility tier doc + CI matrix definition                                 | Goal 8 |

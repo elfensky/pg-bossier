@@ -4,7 +4,7 @@
 
 An operational data plane for [pg-boss](https://github.com/timgit/pg-boss) — forensic job history, typed failure detail, retry lineage, mid-job progress, and lifecycle events. pg-bossier **layers on top of** pg-boss: it extends pg-boss, and never replaces it.
 
-> **Status — v0.1.0, storage substrate.** This release ships the forensic storage layer (Goal 1): a `pgbossier.record` table that mirrors every `pgboss.job` state transition and preserves it permanently — surviving pg-boss's in-place row deletion. The typed query API, mid-job progress API, and lifecycle events are in active development. See [issue #1](https://github.com/elfensky/pg-bossier/issues/1) for the full scope and per-goal status.
+> **Status — pre-release.** Not yet published to npm; the package sits at `0.0.0`. In place today: the forensic storage layer (Goal 1) — a `pgbossier.record` table that mirrors every `pgboss.job` state transition and preserves it permanently, surviving pg-boss's in-place row deletion — and the operational read API (Goal 5): typed methods like `findById`, `listJobs`, `getRetryHistory`, and state counts. Typed failure detail, mid-job progress, and lifecycle events are still to come. See [issue #1](https://github.com/elfensky/pg-bossier/issues/1) for the full scope and per-goal status.
 
 ## Why
 
@@ -54,6 +54,35 @@ const client = bossier({ boss, pool });
 
 await client.boss.createQueue('email');
 await client.boss.send('email', { to: 'user@example.com' });
+```
+
+### Reading job history
+
+The `bossier` client exposes typed read methods over `pgbossier.record`. Because that table outlives pg-boss's row deletion, they answer operational questions long after the `pgboss.job` row is gone:
+
+```ts
+// the latest attempt of one job — null if unknown
+const job = await client.findById(jobId);
+
+// every attempt of a retried job, oldest first
+const attempts = await client.getRetryHistory(jobId);
+
+// a filtered, paginated page, with an exact total
+const { rows, total } = await client.listJobs({
+  queue: 'email',
+  states: ['failed'],
+  limit: 50,
+});
+
+// job counts grouped by current state, or by queue
+const byState = await client.countByState({ queue: 'email' });
+const byQueue = await client.countByQueue();
+
+// the most recently created job in each queue
+const latest = await client.latestPerQueue(['email', 'reports']);
+
+// active jobs running longer than a threshold (default 900s)
+const stalled = await client.listLongRunning({ longerThanSeconds: 600 });
 ```
 
 ### Writing pg-bossier-owned columns
