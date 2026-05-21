@@ -98,3 +98,18 @@ export async function findById<TInput = unknown, TOutput = unknown>(
   );
   return rows[0] ? mapRecord<TInput, TOutput>(rows[0]) : null;
 }
+
+/** Every attempt of a job, oldest first. `[]` if unknown. */
+export async function getRetryHistory<TInput = unknown, TOutput = unknown>(
+  pool: Pool,
+  jobId: string,
+): Promise<JobRecord<TInput, TOutput>[]> {
+  if (!UUID_RE.test(jobId)) return [];
+  const { rows } = await pool.query<RawRecordRow>(
+    `SELECT * FROM pgbossier.record
+     WHERE job_id = $1
+     ORDER BY attempt ASC`,
+    [jobId],
+  );
+  return rows.map((r) => mapRecord<TInput, TOutput>(r));
+}
