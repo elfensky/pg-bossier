@@ -18,3 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `npm run lint` and `npm run lint:fix` scripts.
 - Working conventions in `CLAUDE.md`: Critical rules (KISS, faithful reporting, doc sync, no direct pushes to `main`); Branching/worktree/Git workflow (single-trunk on `main`, worktree-per-branch default, `--no-ff` merges, no squash, version-on-merge); File guidelines (chunked reads, broad rename search, file/function size preferences); explicit "verify before claiming done" rule in Build / test / run.
 - `.worktrees/` added to `.gitignore`.
+- `install(pool)` — creates the `pgbossier` schema, the `pgbossier.record` chronicle table (one row per `(job_id, attempt)`) and its indexes, the `pgbossier.capture()` function, and a capture trigger on `pgboss.job`; backfills jobs that predate installation. Idempotent.
+- `uninstall(pool)` — `DROP SCHEMA pgbossier CASCADE`; removes everything and cascades away the capture trigger, leaving `pgboss.job` untouched (symmetric drop-in).
+- Capture trigger mirrors every `pgboss.job` state transition (`created` / `active` / `completed` / `cancelled` / `retry`) into `pgbossier.record`, preserving each attempt forever — surviving pg-boss's DELETE+INSERT retry path. Fail-open: a capture error never blocks the underlying pg-boss operation.
+- `bossier({ boss, pool })` client exposing the underlying pg-boss instance plus `recordPatch(jobId, attempt, patch)` for the pg-bossier-owned columns (`progress`, `terminal_detail`, `input_snapshot`).
+- Public API from `src/index.ts`: `install`, `uninstall`, `bossier`, and the `BossierClient` / `BossierOptions` / `RecordPatch` types.
+- `pg ^8.0.0` declared as a peer dependency (consumers supply the `pg.Pool`).
+- Integration test suite — `vitest` with `@testcontainers/postgresql`, run against real Postgres + pg-boss 12.18.2 (no mocks).
