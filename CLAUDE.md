@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Pre-implementation.** Tooling is in place (`package.json`, TypeScript with `tsc`, ESM, `CHANGELOG.md`) but no feature code has shipped — `src/index.ts` is a placeholder. Don't invent architecture answers; check open issues first and ask if a decision hasn't been made.
+**v0.1.0 — storage substrate shipped.** The shared storage layer merged on 2026-05-21 (PR #15): the `pgbossier.record` chronicle table, the `pgbossier_capture` trigger on `pgboss.job`, idempotent `install()` / `uninstall()`, the `bossier({ boss, pool })` client with `recordPatch()`, and a `vitest` + `@testcontainers/postgresql` integration suite. `src/` is real code now — `sql.ts` (DDL), `install.ts`, `record.ts`, `client.ts`, `index.ts` (public API). Goal 1 (forensic audit table) is delivered; the per-goal features that build on the substrate — Goals 2–8, and Goal 9's distribution shape — are not yet implemented. See issue #1's "Implementation progress" section for the per-goal status. Don't invent architecture answers; check open issues first and ask if a decision hasn't been made.
 
 The canonical scope document is **[issue #1](https://github.com/elfensky/pg-bossier/issues/1)** ("Requirements: what pg-bossier should achieve"). Treat it as the rubric — any feature, refactor, or design choice must be justifiable against the goals and non-goals it lists. Issue #1 itself explicitly notes: "Anything not explicitly in scope is out — feature requests outside this boundary get closed with a reference to this issue."
 
@@ -19,7 +19,7 @@ The canonical scope document is **[issue #1](https://github.com/elfensky/pg-boss
 
 A **JS/TS library that layers on top of [pg-boss](https://github.com/timgit/pg-boss)** to provide an **operational data plane** — capabilities pg-boss has explicitly declined to take on. Nine concrete goals:
 
-1. **Permanent job history.** `pgbossier.job_audit` populated automatically, surviving pg-boss's in-place row deletion (the `deletion_seconds` `DELETE` and the retry `DELETE`+`INSERT`).
+1. **Permanent job history.** `pgbossier.record` populated automatically, surviving pg-boss's in-place row deletion (the `deletion_seconds` `DELETE` and the retry `DELETE`+`INSERT`). **Shipped in v0.1.0.**
 2. **Typed terminal-state detail.** `terminal_state` (pg-boss's three terminal values — `completed` / `cancelled` / `failed`) + `terminal_detail` (JSONB discriminated by state; `class` mandated when `failed`; `expired` / `superseded` are pg-bossier-derived markers, not pg-boss states). One typed read answers "why did this fail?" without string-matching error text.
 3. **Retry history tracking.** A job keeps one stable `id` across all retries (pg-boss reuses it through the retry `DELETE`+`INSERT`); each attempt is a preserved row-version. `getRetryHistory(jobId)` returns the ordered attempt sequence — no link columns.
 4. **Optional input-snapshot capture.** Opt-in JSONB slot for consumer-supplied "what data did this job see" manifests. Pg-bossier preserves; consumers define shape.
@@ -90,13 +90,13 @@ Optimize for this shape first. Generalization to broader OSS consumers is a post
 
 ## What's deliberately undecided
 
-Each decision below is its own GitHub issue. Sub-issues opened during the issue #1 refinement:
+Each decision below is its own GitHub issue. Sub-issues opened during the issue #1 refinement. **Goal 1's issue ([#2](https://github.com/elfensky/pg-bossier/issues/2)) is closed — delivered by the v0.1.0 substrate;** the rest stay open and were re-scoped on 2026-05-21 to reflect what the substrate settled.
 
 **Goal implementation issues (one per goal):**
 
 | Sub-issue                                                                            | Goal   |
 | ------------------------------------------------------------------------------------- | ------ |
-| Forensic audit table — schema, capture mechanism, write semantics                     | Goal 1 |
+| ✅ Forensic audit table — schema, capture mechanism, write semantics _(done — #2 closed)_ | Goal 1 |
 | Terminal-state detail — discriminated-union shape, worker signaling, `class` mandate   | Goal 2 |
 | Retry history columns — parent/successor links, supersession semantics                | Goal 3 |
 | Input-snapshot slot — opt-in JSONB column, consumer-defined shape                      | Goal 4 |
@@ -132,7 +132,7 @@ Single-trunk model: `main` is the release branch (what gets published to npm). A
    `git worktree add .worktrees/<branch-dir> -b <branch-name>`
 2. `cd` into the worktree and install: `npm install`
 3. Do the work in the worktree directory — small, logical commits as you go (schema → impl → wire-up → tests), not one giant commit at the end
-4. Verify in the worktree before merging back: `npm run lint && npm run build` (and tests once they exist)
+4. Verify in the worktree before merging back: `npm run lint && npm run build && npm test`
 5. From the main checkout: `git checkout main && git merge --no-ff <branch-name>`
 6. **Version-on-merge.** Bump `package.json` version (minor for features, patch for fixes/refactors) and add the `CHANGELOG.md` entry in the **same commit as the code change** (or amend into the merge commit). Not a separate chore commit. The package.json↔CHANGELOG agreement rule from § Versioning and changelog still applies.
 7. Push: `git push`
@@ -180,11 +180,9 @@ Formatter (Prettier or alternative) is deferred — that's a separate decision w
 - **Install:** `npm install`
 - **Lint:** `npm run lint` — ESLint flat config (auto-fix: `npm run lint:fix`)
 - **Build:** `npm run build` — `tsc` emits to `dist/` (gitignored)
-- **Test:** not yet established — runner choice (vitest / node:test / jest) is deferred until first feature lands
+- **Test:** `npm test` — runs `vitest run`. Integration tests live under `test/`, exercised against real Postgres + pg-boss via `@testcontainers/postgresql` (Docker required, no mocks). `vitest.config.ts` sets `fileParallelism: false` — one container per test file.
 
-**Verify before claiming done.** Run `npm run lint && npm run build` (and tests once they exist) before reporting a task complete. Order mirrors a CI fail-fast pipeline: cheap checks first. If anything fails, report the actual output — don't suppress, don't simplify, don't claim success.
-
-Update this section when test tooling is added.
+**Verify before claiming done.** Run `npm run lint && npm run build && npm test` before reporting a task complete. Order mirrors a CI fail-fast pipeline: cheap checks first. If anything fails, report the actual output — don't suppress, don't simplify, don't claim success.
 
 ## File guidelines
 
