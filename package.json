@@ -1,6 +1,6 @@
 {
     "name": "pg-bossier",
-    "version": "0.2.0",
+    "version": "0.0.0",
     "description": "Operational data-plane on pg-boss: forensic preservation with lineage and failure classes, typed query API, mid-flight progress, and subscribable job events. Extends pg-boss, never replaces it.",
     "author": "Andrei Lavrenov <andrei@lav.ren>",
     "license": "MIT",
