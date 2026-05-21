@@ -1,7 +1,7 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 import { install } from '../src/install.js';
-import { findById, getRetryHistory, listJobs, latestPerQueue, countByState } from '../src/read.js';
+import { findById, getRetryHistory, listJobs, latestPerQueue, countByState, countByQueue } from '../src/read.js';
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -173,4 +173,28 @@ test('countByState counts each job once by its current state, all six keys prese
   expect(counts).toEqual({
     created: 1, active: 0, retry: 0, completed: 3, cancelled: 0, failed: 0,
   });
+});
+
+test('countByQueue counts jobs per queue, with a state filter', async () => {
+  const qa = 'read-cbq-a';
+  const qb = 'read-cbq-b';
+  await h.boss.createQueue(qa);
+  await h.boss.createQueue(qb);
+  // qa: 2 failed, 1 created
+  for (let i = 0; i < 2; i++) {
+    const id = await h.boss.send(qa, {}, { retryLimit: 0 });
+    await h.boss.fetch(qa);
+    await h.boss.fail(qa, id!, { err: 'x' });
+  }
+  await h.boss.send(qa, {});
+  // qb: 1 failed
+  const id = await h.boss.send(qb, {}, { retryLimit: 0 });
+  await h.boss.fetch(qb);
+  await h.boss.fail(qb, id!, { err: 'x' });
+
+  const counts = await countByQueue(h.pool, {
+    queues: [qa, qb],
+    states: ['failed'],
+  });
+  expect(counts).toEqual({ [qa]: 2, [qb]: 1 });
 });

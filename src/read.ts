@@ -232,6 +232,25 @@ export async function countByState(
   return result;
 }
 
+/** Job counts by queue. */
+export async function countByQueue(
+  pool: Pool,
+  filter: JobFilter = {},
+): Promise<Record<string, number>> {
+  const { clause, params } = buildWhere(filter);
+  const { rows } = await pool.query<{ queue: string; count: number }>(
+    `WITH ${RECORD_CURRENT}
+     SELECT queue, count(*)::int AS count
+     FROM current
+     ${clause}
+     GROUP BY queue`,
+    params,
+  );
+  const result: Record<string, number> = {};
+  for (const row of rows) result[row.queue] = row.count;
+  return result;
+}
+
 /** Filtered, paginated job list over the current view, with an exact total. */
 export async function listJobs<TInput = unknown, TOutput = unknown>(
   pool: Pool,
