@@ -202,7 +202,7 @@ Methods are generic with `unknown` defaults. Inline call-site generics (`findByI
 
 1. **`search()` — deferred from Goal 5 v1.** descent-app's current queries need no JSONB content search; v1's `search` also carried a dedup correctness bug and depends on three GIN indexes whose write cost lands on the hot capture path. The GIN indexes already shipped, so `search` can be added later without a schema change. Recommendation: defer to a follow-up issue, add when a consumer needs it.
 2. **`peek` — deferred from Goal 5 v1.** "Preview the queue" is covered by `listJobs({ states: ['created'] })`, descent-app does not use it, and it had the deferred-jobs ambiguity (`record` has no `start_after`). Deferring it also avoids a substrate schema change. Add later if a real need appears.
-3. **`getActiveWorkers` — out of Goal 5.** `record` captures no worker identity; a real version needs a *worker-identity capture* feature. Open a dedicated issue. ⚠️ **This de-scopes "worker context" from issue #1's success criterion #2** — that de-scope must be acknowledged by editing issue #1 (the charter changes only there).
+3. **`getActiveWorkers` — dropped entirely (2026-05-21).** Not deferred — removed from scope. `record` captures no worker identity, and recording which worker or process ran a job is observability, not the job data plane; the descent-app query triage found zero demand for it. Issue #1's charter has been updated to drop `getActiveWorkers` from Goal 5 and "worker context" from success criterion #2.
 4. **Triage completeness — checked 2026-05-21.** Beyond `src/lib/jobs/queries.js` (triaged above), descent-app has raw `pgboss.*` access in a few more files, now characterized:
    - `src/lib/jobs/flush-progress.js` — *writes* progress into `pgboss.job.output` (`UPDATE pgboss.job SET output … WHERE state='active'`). This is the descent-app#342 progress fallback — **Goal 6** scope, not Goal 5.
    - `src/lib/space-track/sync.js` — one `SELECT output FROM pgboss.job` *read* — covered by `findById`.
@@ -216,7 +216,6 @@ Methods are generic with `unknown` defaults. Inline call-site generics (`findByI
 - Exact SQL per method, the column→camelCase mapping, the `JobRecord` type module — that is the buildable spec.
 - The `Job<TInput,TOutput>` registration/inference system (#13).
 - Dead-letter lineage (#4); the discriminated `TerminalDetail` type (#3).
-- A worker-identity capture mechanism (future `getActiveWorkers`).
 - `search()` and `peek` (deferred — see above).
 
 ## Testing

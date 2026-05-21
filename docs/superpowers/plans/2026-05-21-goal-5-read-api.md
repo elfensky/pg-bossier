@@ -1051,7 +1051,7 @@ If nothing changed, skip this step.
 
 Per `CLAUDE.md`'s worktree workflow: from the main checkout, `git checkout main && git merge --no-ff feat/goal-5-read-api`. Goal 5 is a feature → **minor** version bump: `0.1.1` → `0.2.0`. Bump `package.json` (use `npm version 0.2.0 --no-git-tag-version` so `package-lock.json` stays in sync) and add the `CHANGELOG.md` entry — rename `[Unreleased]` to `[0.2.0] - <date>`, open a fresh `[Unreleased]` — in the merge commit. Push, then `git worktree remove .worktrees/feat-goal-5-read-api` and `git branch -d feat/goal-5-read-api`.
 
-Then update issue #6 (mark Goal 5's read API delivered) and issue #1's Implementation progress. The remaining Goal 5 work — `search()`, `peek`, `getActiveWorkers` — is deferred per the design doc and is not part of this plan.
+Then update issue #6 (mark Goal 5's read API delivered) and issue #1's Implementation progress. The remaining Goal 5 work — `search()` and `peek` — is deferred per the design doc and is not part of this plan; `getActiveWorkers` was dropped entirely (worker identity is out of scope).
 
 ## Notes for the executor
 

@@ -12,7 +12,7 @@ The **buildable** spec — exact SQL, exact types, file layout — for the seven
 
 **In scope:** the `JobRecord` type module, the row mapper, the exact SQL of all seven methods, the one schema addition (a partial index), client wiring, input validation, the test matrix.
 
-**Out of scope:** `search()` / `peek` / `getActiveWorkers` (deferred per the design); the `Job<TInput,TOutput>` registration system (#13); lifecycle events (#8).
+**Out of scope:** `search()` / `peek` (deferred per the design); `getActiveWorkers` (dropped — worker identity is out of scope); the `Job<TInput,TOutput>` registration system (#13); lifecycle events (#8).
 
 ## File layout
 
@@ -297,7 +297,7 @@ Clauses are joined with ` AND `; an empty filter yields no `WHERE`. `queue` and 
 
 ## What this spec does NOT decide
 
-- `search()` / `peek` / `getActiveWorkers` — deferred (design doc).
+- `search()` / `peek` — deferred (design doc); `getActiveWorkers` — dropped (worker identity is out of scope).
 - The `Job<TInput,TOutput>` registration/inference system (#13).
 - The discriminated `TerminalDetail` type (#3) — `terminalDetail` stays `unknown` until then.
 - Cursor pagination — `limit`/`offset` for v1.

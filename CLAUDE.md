@@ -23,7 +23,7 @@ A **JS/TS library that layers on top of [pg-boss](https://github.com/timgit/pg-b
 2. **Typed terminal-state detail.** `terminal_state` (pg-boss's three terminal values — `completed` / `cancelled` / `failed`) + `terminal_detail` (JSONB discriminated by state; `class` mandated when `failed`; `expired` / `superseded` are pg-bossier-derived markers, not pg-boss states). One typed read answers "why did this fail?" without string-matching error text.
 3. **Retry history tracking.** A job keeps one stable `id` across all retries (pg-boss reuses it through the retry `DELETE`+`INSERT`); each attempt is a preserved row-version. `getRetryHistory(jobId)` returns the ordered attempt sequence — no link columns.
 4. **Optional input-snapshot capture.** Opt-in JSONB slot for consumer-supplied "what data did this job see" manifests. Pg-bossier preserves; consumers define shape.
-5. **New APIs.** Operational read methods (`peek` / `findById` / `listActive` / `listStalled` / `getRetryHistory` / `getActiveWorkers` / state-counts). pg-boss 12 partially covers some (`findJobs` / `getQueueStats` / `getWipData`) — the Goal 5 sub-issue names each method's differentiator. Write extensions for Goals 2/4/6 are deferred per-feature per the API-shape principle.
+5. **New APIs.** Operational read methods (`peek` / `findById` / `listActive` / `listStalled` / `getRetryHistory` / state-counts). pg-boss 12 partially covers some (`findJobs` / `getQueueStats` / `getWipData`) — the Goal 5 sub-issue names each method's differentiator. Write extensions for Goals 2/4/6 are deferred per-feature per the API-shape principle.
 6. **Persistent job progress.** One mechanism that survives DELETE+re-INSERT. Two usage patterns from the same slot: resumable (position) and non-resumable (display). Worker decides whether to use the persisted value on retry.
 7. **Lifecycle event API.** Event emission on every state transition (in-process EventEmitter and/or `LISTEN/NOTIFY` on `pgbossier_*` channels). Maps to pg-boss#570 (declined upstream). Distinct from pg-boss's "pub/sub" feature (which is queue fan-out, not real-time events).
 8. **pg-boss compatibility tier system.** Stable / Transitional / Forbidden classification + CI matrix.
@@ -83,7 +83,7 @@ Optimize for this shape first. Generalization to broader OSS consumers is a post
 ## Success criteria (from issue #1)
 
 1. descent-app's raw-SQL count against `pgboss.*` drops to zero (or to a documented short list with stated reasons).
-2. "What happened to job X six months ago?" is answerable with one typed query — including inputs, final output, failure class, full retry history, and worker context — even after pg-boss has deleted the job row from `pgboss.job`.
+2. "What happened to job X six months ago?" is answerable with one typed query — including inputs, final output, failure class, and full retry history — even after pg-boss has deleted the job row from `pgboss.job`.
 3. Consumers wire to job events, not timers. No production consumer of pg-bossier runs a polling loop against the query API to detect state changes.
 4. Adoption on an existing pg-boss install takes under an hour: install package, run one migration, swap imports where extended APIs are needed.
 5. pg-boss minor releases are supported within ~2 weeks of upstream publication, verified by a passing CI matrix.
