@@ -14,3 +14,7 @@ export async function install(pool: Pool): Promise<void> {
   await pool.query(CAPTURE_TRIGGER_SQL);
   await pool.query(BACKFILL_SQL);
 }
+
+export async function uninstall(pool: Pool): Promise<void> {
+  await pool.query(`DROP SCHEMA IF EXISTS pgbossier CASCADE;`);
+}
