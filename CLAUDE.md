@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**v0.1.0 — storage substrate shipped.** The shared storage layer merged on 2026-05-21 (PR #15): the `pgbossier.record` chronicle table, the `pgbossier_capture` trigger on `pgboss.job`, idempotent `install()` / `uninstall()`, the `bossier({ boss, pool })` client with `recordPatch()`, and a `vitest` + `@testcontainers/postgresql` integration suite. `src/` is real code now — `sql.ts` (DDL), `install.ts`, `record.ts`, `client.ts`, `index.ts` (public API). Goal 1 (forensic audit table) is delivered; the per-goal features that build on the substrate — Goals 2–8, and Goal 9's distribution shape — are not yet implemented. See issue #1's "Implementation progress" section for the per-goal status. Don't invent architecture answers; check open issues first and ask if a decision hasn't been made.
+**v0.1.1 — storage substrate shipped; CI and packaging in place.** The shared storage layer merged in v0.1.0 on 2026-05-21 (PR #15): the `pgbossier.record` chronicle table, the `pgbossier_capture` trigger on `pgboss.job`, idempotent `install()` / `uninstall()`, the `bossier({ boss, pool })` client with `recordPatch()`, and a `vitest` + `@testcontainers/postgresql` integration suite. `src/` is real code now — `sql.ts` (DDL), `install.ts`, `record.ts`, `client.ts`, `index.ts` (public API). v0.1.1 added GitHub Actions CI, the `exports` / `files` / `prepare` packaging that makes `pg-bossier` importable and publishable, a `COMPATIBILITY.md` pg-boss tier doc, and a deterministic test harness — no goal features. Goal 1 (forensic audit table) is delivered; the per-goal features that build on the substrate — Goals 2–8, and Goal 9's distribution shape — are not yet implemented. See issue #1's "Implementation progress" section for the per-goal status. Don't invent architecture answers; check open issues first and ask if a decision hasn't been made.
 
 The canonical scope document is **[issue #1](https://github.com/elfensky/pg-bossier/issues/1)** ("Requirements: what pg-bossier should achieve"). Treat it as the rubric — any feature, refactor, or design choice must be justifiable against the goals and non-goals it lists. Issue #1 itself explicitly notes: "Anything not explicitly in scope is out — feature requests outside this boundary get closed with a reference to this issue."
 
@@ -181,8 +181,9 @@ Formatter (Prettier or alternative) is deferred — that's a separate decision w
 - **Lint:** `npm run lint` — ESLint flat config (auto-fix: `npm run lint:fix`)
 - **Build:** `npm run build` — `tsc` emits to `dist/` (gitignored)
 - **Test:** `npm test` — runs `vitest run`. Integration tests live under `test/`, exercised against real Postgres + pg-boss via `@testcontainers/postgresql` (Docker required, no mocks). `vitest.config.ts` sets `fileParallelism: false` — one container per test file.
+- **CI:** `.github/workflows/ci.yml` runs `npm ci` → lint → build → test on every push to `main` and every pull request (`ubuntu-latest`, Node 22). The testcontainers suite runs on the runner's own Docker — no `services:` block. One Node / one pg-boss version for now; the pg-boss version matrix is tracked in issue #9.
 
-**Verify before claiming done.** Run `npm run lint && npm run build && npm test` before reporting a task complete. Order mirrors a CI fail-fast pipeline: cheap checks first. If anything fails, report the actual output — don't suppress, don't simplify, don't claim success.
+**Verify before claiming done.** Run `npm run lint && npm run build && npm test` before reporting a task complete. Order mirrors the CI workflow's fail-fast order: cheap checks first. If anything fails, report the actual output — don't suppress, don't simplify, don't claim success.
 
 ## File guidelines
 
