@@ -25,6 +25,3 @@ Sub-issue of #1 (cross-cutting — gives Goal 8's "stay close" constraint enforc
 - The actual performance optimizations to achieve the budget (per-goal sub-issues).
 - Test-coverage targets (separate operational concern).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.

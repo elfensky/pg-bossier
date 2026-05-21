@@ -25,6 +25,3 @@ Sub-issue of #1 (Goal 4 — Optional input-snapshot capture).
 - pg-bossier auto-capture of consumed data — explicit non-goal.
 - The audit table existence (Goal 1).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.

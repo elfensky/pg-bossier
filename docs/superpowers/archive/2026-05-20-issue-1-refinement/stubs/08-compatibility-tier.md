@@ -23,6 +23,3 @@ Sub-issue of #1 (Goal 8 — pg-boss compatibility tier system).
 - Implementation details of how each goal uses pg-boss APIs (that's per-goal-sub-issue).
 - Numeric per-event performance budget (cross-cutting sub-issue).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.

@@ -29,6 +29,3 @@ Sub-issue of #1 (Goal 2 — Typed terminal-state detail capture).
 - Whether failures across the retry chain reuse the same `terminal_detail` or each attempt gets its own (Goal 3 sub-issue).
 - TS generics surface for `Job<TInput, TOutput>` more broadly (cross-cutting sub-issue).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.

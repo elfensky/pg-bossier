@@ -35,6 +35,3 @@ Sub-issue of #1 (Goal 5 — New APIs).
 - Write-side methods — terminal_detail (Goal 2), input_snapshot (Goal 4), progress (Goal 6), and lifecycle event subscription (Goal 7) are decided in their own goals.
 - The audit table schema (Goal 1).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.

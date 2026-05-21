@@ -25,6 +25,3 @@ Sub-issue of #1 (cross-cutting — most affects Goal 5; also Goals 6 and 7).
 - The method signatures themselves (Goal 5 sub-issue).
 - Storage schema (Goal 1).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.

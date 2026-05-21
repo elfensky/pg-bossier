@@ -28,6 +28,3 @@ Verified against pg-boss 12.18.2 source: pg-boss does NOT use Postgres LISTEN/NO
 - Whether to ship OpenTelemetry exporters (explicit non-goal in #1).
 - The shape of `terminal_detail` carried in `failed` events (Goal 2).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.

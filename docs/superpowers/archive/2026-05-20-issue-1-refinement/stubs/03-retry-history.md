@@ -28,6 +28,3 @@ Sub-issue of #1 (Goal 3 — Retry history tracking).
 - The `terminal_detail` shape (Goal 2 / #3).
 - Worker identity tracking (Goal 5 / `getActiveWorkers`).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.

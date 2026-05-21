@@ -24,6 +24,3 @@ Sub-issue of #1 (cross-cutting — affects Goal 1 implementation).
 - The audit table schema (Goal 1 sub-issue).
 - pg-bossier upgrade migrations between versions (Goal 9 sub-issue).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.

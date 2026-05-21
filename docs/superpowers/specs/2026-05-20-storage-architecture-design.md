@@ -4,7 +4,7 @@
 - **Date:** 2026-05-20
 - **Author:** elfensky, with claude-code (brainstorming)
 - **Target:** [elfensky/pg-bossier#1](https://github.com/elfensky/pg-bossier/issues/1) — the storage / capture / query layer beneath Goals 1–7
-- **Builds on:** `docs/superpowers/specs/2026-05-19-issue-1-refinement-design.md`
+- **Builds on:** `docs/superpowers/archive/2026-05-19-issue-1-refinement-design.md` (archived)
 
 ## Context
 

@@ -29,6 +29,3 @@ Sub-issue of #1 (Goal 6 — Persistent job progress).
 - Retry-history reconstruction (Goal 3).
 - TypeScript generics surface for the progress payload (cross-cutting sub-issue).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.

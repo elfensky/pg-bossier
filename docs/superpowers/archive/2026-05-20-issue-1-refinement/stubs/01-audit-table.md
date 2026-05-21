@@ -24,6 +24,3 @@ Sub-issue of #1 (Goal 1 — Permanent job history). Rubric for this issue is the
 - The exact backfill strategy (cross-cutting sub-issue).
 - The numeric per-event performance budget (cross-cutting sub-issue).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope. This stub exists for visibility.

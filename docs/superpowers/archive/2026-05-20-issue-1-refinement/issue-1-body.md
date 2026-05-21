@@ -209,8 +209,9 @@ The cross-cutting storage / capture / query architecture beneath Goals 1–7 is 
 
 ## Related
 
-- Refinement reasoning: [`docs/superpowers/specs/2026-05-19-issue-1-refinement-design.md`](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-19-issue-1-refinement-design.md)
 - Storage / capture / query architecture: [`docs/superpowers/specs/2026-05-20-storage-architecture-design.md`](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-storage-architecture-design.md)
+- Substrate buildable spec: [`docs/superpowers/specs/2026-05-20-substrate-spec.md`](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/specs/2026-05-20-substrate-spec.md)
+- Refinement reasoning (archived): [`docs/superpowers/archive/2026-05-19-issue-1-refinement-design.md`](https://github.com/elfensky/pg-bossier/blob/main/docs/superpowers/archive/2026-05-19-issue-1-refinement-design.md)
 - [drunikbe/descent-app#342](https://github.com/drunikbe/descent-app/issues/342) — JobProgress fallback approach in the consumer
 - [drunikbe/descent-app#343](https://github.com/drunikbe/descent-app/issues/343) — descent-app tracking issue for raw-SQL removal
 

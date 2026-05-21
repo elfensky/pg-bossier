@@ -24,6 +24,3 @@ Sub-issue of #1 (Goal 9 — One-step install, symmetric uninstall).
 - The audit table schema itself (Goal 1).
 - TypeScript generics surface (cross-cutting sub-issue).
 
-## Blocked by
-
-#1 — pending agreement on the refined scope.
