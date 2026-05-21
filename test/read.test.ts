@@ -220,6 +220,76 @@ test('listLongRunning excludes a freshly-started job under a large threshold', a
   expect(running).toHaveLength(0);
 });
 
+test('listJobs reports the real total even when the page is past the end', async () => {
+  const queue = 'read-list-pastend';
+  await h.boss.createQueue(queue);
+  for (let i = 0; i < 3; i++) await h.boss.send(queue, { i });
+
+  // a page whose offset skips every match: rows are empty, but the total
+  // must still be the true count — not 0.
+  const past = await listJobs(h.pool, { queue, limit: 10, offset: 100 });
+  expect(past.rows).toHaveLength(0);
+  expect(past.total).toBe(3);
+});
+
+test('listJobs throws when both queue and queues are supplied', async () => {
+  await expect(
+    listJobs(h.pool, { queue: 'read-list-both', queues: ['read-list-both'] }),
+  ).rejects.toThrow(/queue/);
+});
+
+test('listJobs falls back to a safe ordering for an unknown orderBy value', async () => {
+  const queue = 'read-list-badorder';
+  await h.boss.createQueue(queue);
+  await h.boss.send(queue, {});
+
+  // a JS caller bypassing the orderBy type must not yield `ORDER BY undefined`.
+  const result = await listJobs(h.pool, { queue, orderBy: 'bogus' as never });
+  expect(result.total).toBe(1);
+});
+
+test('latestPerQueue ignores a null created_on when picking the most recent job', async () => {
+  const queue = 'read-lpq-null';
+  // two captured rows for one queue: one with a real timestamp, one with a
+  // NULL created_on (the column is nullable). The real timestamp must win.
+  await h.pool.query(
+    `INSERT INTO pgbossier.record
+       (job_id, queue, attempt, state, created_on, captured_at)
+     VALUES
+       ($1, $3, 0, 'created', now(), now()),
+       ($2, $3, 0, 'created', NULL,  now())`,
+    [
+      '11111111-1111-1111-1111-111111111111',
+      '22222222-2222-2222-2222-222222222222',
+      queue,
+    ],
+  );
+
+  const rows = await latestPerQueue(h.pool, [queue]);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.jobId).toBe('11111111-1111-1111-1111-111111111111');
+});
+
+test('listLongRunning returns only the current attempt of a retried job, no phantom', async () => {
+  // F3 verification: listLongRunning queries pgbossier.record directly (not the
+  // RECORD_CURRENT view). That is correct only if a superseded attempt is never
+  // frozen at state='active'. pg-boss moves a failed-with-retries job to 'retry'
+  // before the next attempt, so the old attempt's capture is 'retry', not
+  // 'active' — this test pins that invariant.
+  const queue = 'read-llr-retry';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 1 });
+  await h.boss.fetch(queue);                       // attempt 0 -> active
+  await h.boss.fail(queue, jobId!, { err: 'x' });  // attempt 0 -> retry
+  await h.boss.fetch(queue);                       // attempt 1 -> active
+
+  const running = await listLongRunning(h.pool, { queue, longerThanSeconds: 0 });
+  const forJob = running.filter((r) => r.jobId === jobId);
+  expect(forJob).toHaveLength(1);
+  expect(forJob[0]!.attempt).toBe(1);
+  expect(forJob[0]!.state).toBe('active');
+});
+
 test('listLongRunning query is served by record_active_idx, not a seq scan', async () => {
   const client = await h.pool.connect();
   try {

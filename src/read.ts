@@ -149,6 +149,9 @@ function resolveOffset(offset: number | undefined): number {
 
 /** Turn a JobFilter into a parameterized WHERE clause. Params start at $1. */
 function buildWhere(filter: JobFilter): { clause: string; params: unknown[] } {
+  if (filter.queue !== undefined && filter.queues !== undefined) {
+    throw new Error('JobFilter: set either `queue` or `queues`, not both');
+  }
   const conds: string[] = [];
   const params: unknown[] = [];
   const next = (): string => `$${params.length + 1}`;
@@ -201,7 +204,7 @@ export async function latestPerQueue(
      SELECT DISTINCT ON (queue) *
      FROM current
      WHERE queue = ANY($1) ${stateClause}
-     ORDER BY queue, created_on DESC, job_id`,
+     ORDER BY queue, created_on DESC NULLS LAST, job_id`,
     params,
   );
   return rows.map((r) => mapRecord(r));
@@ -253,7 +256,15 @@ export async function countByQueue(
 
 const DEFAULT_LONG_RUNNING_SECONDS = 900;
 
-/** Active jobs whose started_on is older than a threshold (default 900s). */
+/**
+ * Active jobs whose started_on is older than a threshold (default 900s).
+ *
+ * Queries `pgbossier.record` directly — not the RECORD_CURRENT latest-attempt
+ * view the other readers use — so the `record_active_idx` partial index serves
+ * it. This is correct because pg-boss moves a failed-with-retries job to
+ * `retry` before its next attempt, so a superseded attempt is never frozen at
+ * `state = 'active'`; the retried-job test in `read.test.ts` pins that invariant.
+ */
 export async function listLongRunning(
   pool: Pool,
   opts: { queue?: string; longerThanSeconds?: number; limit?: number } = {},
@@ -289,7 +300,9 @@ export async function listJobs<TInput = unknown, TOutput = unknown>(
 ): Promise<{ rows: JobRecord<TInput, TOutput>[]; total: number }> {
   const limit = resolveLimit(opts.limit);
   const offset = resolveOffset(opts.offset);
-  const orderCol = ORDER_COLUMNS[opts.orderBy ?? 'createdOn'];
+  // `?? createdOn` guards a JS caller that bypasses the `orderBy` type:
+  // an unmapped value would otherwise interpolate `ORDER BY undefined`.
+  const orderCol = ORDER_COLUMNS[opts.orderBy ?? 'createdOn'] ?? ORDER_COLUMNS.createdOn;
   const { clause, params } = buildWhere(opts);
   const { rows } = await pool.query<RawRecordRow & { total_count: string }>(
     `WITH ${RECORD_CURRENT}
@@ -300,6 +313,18 @@ export async function listJobs<TInput = unknown, TOutput = unknown>(
      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, limit, offset],
   );
-  const total = rows.length > 0 ? Number(rows[0]!.total_count) : 0;
+  let total = rows.length > 0 ? Number(rows[0]!.total_count) : 0;
+  if (rows.length === 0 && offset > 0) {
+    // `count(*) OVER ()` only rides along on returned rows; an offset past
+    // the end yields none, so count separately to keep `total` exact.
+    const counted = await pool.query<{ count: number }>(
+      `WITH ${RECORD_CURRENT}
+       SELECT count(*)::int AS count
+       FROM current
+       ${clause}`,
+      params,
+    );
+    total = counted.rows[0]?.count ?? 0;
+  }
   return { rows: rows.map((r) => mapRecord<TInput, TOutput>(r)), total };
 }

@@ -56,9 +56,20 @@ test('the client exposes the read methods bound to its pool', async () => {
   const listed = await client.listJobs({ queue });
   expect(listed.total).toBe(1);
 
-  expect(typeof client.getRetryHistory).toBe('function');
-  expect(typeof client.latestPerQueue).toBe('function');
-  expect(typeof client.countByState).toBe('function');
-  expect(typeof client.countByQueue).toBe('function');
-  expect(typeof client.listLongRunning).toBe('function');
+  // exercise every read method against the client's pool, not just `typeof`.
+  const history = await client.getRetryHistory(jobId!);
+  expect(history.map((r) => r.attempt)).toEqual([0]);
+
+  const latest = await client.latestPerQueue([queue]);
+  expect(latest[0]!.jobId).toBe(jobId);
+
+  const byState = await client.countByState({ queue });
+  expect(byState.created).toBe(1);
+
+  const byQueue = await client.countByQueue({ queue });
+  expect(byQueue[queue]).toBe(1);
+
+  // the job is 'created', not 'active' — listLongRunning is correctly empty.
+  const longRunning = await client.listLongRunning({ queue, longerThanSeconds: 0 });
+  expect(longRunning).toEqual([]);
 });
