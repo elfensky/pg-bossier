@@ -43,3 +43,33 @@ test('app-hook columns survive a later capture-trigger re-fire', async () => {
   expect(rows[0]!.state).toBe('active');          // trigger updated its own column
   expect(rows[0]!.progress).toEqual({ done: 7 }); // app-hook column was NOT clobbered
 });
+
+test('the client exposes the read methods bound to its pool', async () => {
+  const queue = 'client-read';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, { via: 'client' });
+
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  const job = await client.findById(jobId!);
+  expect(job!.jobId).toBe(jobId);
+
+  const listed = await client.listJobs({ queue });
+  expect(listed.total).toBe(1);
+
+  // exercise every read method against the client's pool, not just `typeof`.
+  const history = await client.getRetryHistory(jobId!);
+  expect(history.map((r) => r.attempt)).toEqual([0]);
+
+  const latest = await client.latestPerQueue([queue]);
+  expect(latest[0]!.jobId).toBe(jobId);
+
+  const byState = await client.countByState({ queue });
+  expect(byState.created).toBe(1);
+
+  const byQueue = await client.countByQueue({ queue });
+  expect(byQueue[queue]).toBe(1);
+
+  // the job is 'created', not 'active' — listLongRunning is correctly empty.
+  const longRunning = await client.listLongRunning({ queue, longerThanSeconds: 0 });
+  expect(longRunning).toEqual([]);
+});

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-21
+
+### Added
+
+- Goal 5 operational read API — seven typed read methods on the `bossier` client, all querying the permanent `pgbossier.record` chronicle so jobs stay answerable after pg-boss has deleted the `pgboss.job` row:
+  - `findById(jobId)` — the latest attempt of one job (`null` if unknown or malformed).
+  - `getRetryHistory(jobId)` — every attempt of a job, oldest first.
+  - `listJobs(opts)` — filtered, paginated job list over the current-attempt view, with an exact total (independent of pagination).
+  - `latestPerQueue(queues)` — the most recently created job in each queue.
+  - `countByState(filter)` / `countByQueue(filter)` — job counts grouped by current state (all six state keys zero-filled) or by queue.
+  - `listLongRunning(opts)` — active jobs whose `started_on` is older than a threshold (default 900s).
+- Exported read-API types `JobRecord`, `JobState`, `JobFilter`, and `ListJobsOpts`; `findById`, `getRetryHistory`, and `listJobs` are generic over `<TInput, TOutput>`.
+- `record_active_idx` — a partial index on `pgbossier.record (queue, started_on) WHERE state = 'active'` that serves `listLongRunning` without a sequential scan.
+
 ## [0.1.1] - 2026-05-21
 
 ### Added
