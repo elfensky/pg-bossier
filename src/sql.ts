@@ -57,3 +57,12 @@ DROP TRIGGER IF EXISTS pgbossier_capture ON pgboss.job;
 CREATE TRIGGER pgbossier_capture
   AFTER INSERT OR UPDATE OF state ON pgboss.job
   FOR EACH ROW EXECUTE FUNCTION pgbossier.capture();`;
+
+export const BACKFILL_SQL = `
+INSERT INTO pgbossier.record
+  (job_id, queue, attempt, state, data, output,
+   created_on, started_on, completed_on, captured_at)
+SELECT id, name, retry_count, state, data, output,
+       created_on, started_on, completed_on, now()
+FROM pgboss.job
+ON CONFLICT (job_id, attempt) DO NOTHING;`;
