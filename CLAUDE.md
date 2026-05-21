@@ -13,7 +13,7 @@ The canonical scope document is **[issue #1](https://github.com/elfensky/pg-boss
 - **KISS.** Simple solutions only. Don't overengineer. Don't add abstractions for hypothetical future needs. Three similar lines beats a premature abstraction. When in doubt about an open question, default to the simpler choice and surface the tradeoff rather than silently picking a clever one.
 - **Report outcomes faithfully.** If lint, build, or tests fail, say so with the actual output. If you didn't run a verification step, say so — don't imply it ran. Never claim "all checks pass" when output shows failures. Never suppress or simplify failing checks to manufacture a green result. Never characterize incomplete or broken work as done.
 - **Keep docs in sync with code.** When a change affects `CLAUDE.md`, `CHANGELOG.md`, or an open issue, update the doc in the same change — not a separate follow-up. Stale docs are worse than no docs.
-- **Never commit feature work directly to `develop` or `main`.** Feature work goes through a worktree → branch → merge into `develop`, even for small changes. `main` only ever receives release commits (and hotfixes). Exceptions are user-explicit only. See § Branching, worktrees, and Git workflow.
+- **`main` only ever receives release commits and hotfixes** — never a direct or feature commit. On `develop`: large features go through a worktree → branch → `--no-ff` merge; bugfixes, chores, and docs may be committed directly. See § Branching, worktrees, and Git workflow.
 
 ## What pg-bossier is
 
@@ -127,12 +127,12 @@ If a task touches one of these and there's no companion issue, open one (or ask 
 
 Two long-lived branches:
 
-- **`develop`** — the integration branch, and the repo's default branch. Full commit history: every feature branch merges here with `--no-ff`. All day-to-day work happens off `develop`.
-- **`main`** — the release ledger. One commit per release, each a squashed snapshot of `develop` at release time. `main` receives nothing else (except hotfixes). It is intentionally empty until the first release.
+- **`develop`** — the integration branch, and the repo's default branch. Full commit history; all day-to-day work happens here.
+- **`main`** — the release ledger. One commit per release, each a squashed snapshot of `develop` at release time. `main` receives nothing else (except hotfixes) — never a direct commit. It is intentionally empty until the first release.
 
-Feature branches are short-lived, checked out via worktree off `develop`.
+**What needs a feature branch:** large features go through a worktree → branch → `--no-ff` merge into `develop`. Bugfixes, chores, refactors, and docs may be committed directly to `develop` — no worktree, no branch. When in doubt, or when a change wants isolation and incremental review, use a branch.
 
-**Default workflow (worktree per branch):**
+**Feature workflow (worktree per branch)** — for large features:
 
 1. Create the worktree off `develop` (run from the main checkout):
    `git worktree add .worktrees/<branch-dir> -b <branch-name> develop`
@@ -163,8 +163,6 @@ A release is a single squashed commit on `main` that snapshots `develop`:
 - **`develop` → `main` releases are squashed** — one commit per release. This is the *only* place squashing is used.
 - **No `--rebase` merges** into `develop` — preserve the branch shape.
 - **Commit incrementally on feature branches.** Each commit should be a coherent unit of progress that a reviewer (or a future you) can read independently.
-
-**Exception (direct commits):** Trivial docs-only updates may go straight to `develop` when the user explicitly asks ("just do this quickly", "skip the worktree"). `main` never takes a direct commit outside the release/hotfix flow. If in doubt, use a worktree.
 
 ## Language
 
