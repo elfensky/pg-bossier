@@ -183,6 +183,30 @@ function buildWhere(filter: JobFilter): { clause: string; params: unknown[] } {
   return { clause: conds.length ? `WHERE ${conds.join(' AND ')}` : '', params };
 }
 
+/** The single most-recently-created job in each queue, at its current state. */
+export async function latestPerQueue(
+  pool: Pool,
+  queues: string[],
+  opts: { states?: JobState[] } = {},
+): Promise<JobRecord[]> {
+  if (queues.length === 0) return [];
+  const params: unknown[] = [queues];
+  let stateClause = '';
+  if (opts.states !== undefined) {
+    params.push(opts.states);
+    stateClause = `AND state = ANY($${params.length})`;
+  }
+  const { rows } = await pool.query<RawRecordRow>(
+    `WITH ${RECORD_CURRENT}
+     SELECT DISTINCT ON (queue) *
+     FROM current
+     WHERE queue = ANY($1) ${stateClause}
+     ORDER BY queue, created_on DESC, job_id`,
+    params,
+  );
+  return rows.map((r) => mapRecord(r));
+}
+
 /** Filtered, paginated job list over the current view, with an exact total. */
 export async function listJobs<TInput = unknown, TOutput = unknown>(
   pool: Pool,

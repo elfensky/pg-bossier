@@ -1,7 +1,7 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 import { install } from '../src/install.js';
-import { findById, getRetryHistory, listJobs } from '../src/read.js';
+import { findById, getRetryHistory, listJobs, latestPerQueue } from '../src/read.js';
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -128,4 +128,24 @@ test('listJobs filters by a creation-time window', async () => {
 
 test('listJobs rejects a non-positive limit', async () => {
   await expect(listJobs(h.pool, { limit: 0 })).rejects.toThrow();
+});
+
+test('latestPerQueue returns the most recent job per queue', async () => {
+  const qa = 'read-lpq-a';
+  const qb = 'read-lpq-b';
+  await h.boss.createQueue(qa);
+  await h.boss.createQueue(qb);
+  await h.boss.send(qa, { first: true });
+  const lastA = await h.boss.send(qa, { last: true });
+  const lastB = await h.boss.send(qb, { only: true });
+
+  const rows = await latestPerQueue(h.pool, [qa, qb]);
+  const byQueue = new Map(rows.map((r) => [r.queue, r]));
+  expect(byQueue.get(qa)!.jobId).toBe(lastA);
+  expect(byQueue.get(qb)!.jobId).toBe(lastB);
+});
+
+test('latestPerQueue returns an empty array for an empty queue list', async () => {
+  const rows = await latestPerQueue(h.pool, []);
+  expect(rows).toEqual([]);
 });
