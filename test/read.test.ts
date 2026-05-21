@@ -270,6 +270,26 @@ test('latestPerQueue ignores a null created_on when picking the most recent job'
   expect(rows[0]!.jobId).toBe('11111111-1111-1111-1111-111111111111');
 });
 
+test('listLongRunning returns only the current attempt of a retried job, no phantom', async () => {
+  // F3 verification: listLongRunning queries pgbossier.record directly (not the
+  // RECORD_CURRENT view). That is correct only if a superseded attempt is never
+  // frozen at state='active'. pg-boss moves a failed-with-retries job to 'retry'
+  // before the next attempt, so the old attempt's capture is 'retry', not
+  // 'active' — this test pins that invariant.
+  const queue = 'read-llr-retry';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 1 });
+  await h.boss.fetch(queue);                       // attempt 0 -> active
+  await h.boss.fail(queue, jobId!, { err: 'x' });  // attempt 0 -> retry
+  await h.boss.fetch(queue);                       // attempt 1 -> active
+
+  const running = await listLongRunning(h.pool, { queue, longerThanSeconds: 0 });
+  const forJob = running.filter((r) => r.jobId === jobId);
+  expect(forJob).toHaveLength(1);
+  expect(forJob[0]!.attempt).toBe(1);
+  expect(forJob[0]!.state).toBe('active');
+});
+
 test('listLongRunning query is served by record_active_idx, not a seq scan', async () => {
   const client = await h.pool.connect();
   try {

@@ -256,7 +256,15 @@ export async function countByQueue(
 
 const DEFAULT_LONG_RUNNING_SECONDS = 900;
 
-/** Active jobs whose started_on is older than a threshold (default 900s). */
+/**
+ * Active jobs whose started_on is older than a threshold (default 900s).
+ *
+ * Queries `pgbossier.record` directly — not the RECORD_CURRENT latest-attempt
+ * view the other readers use — so the `record_active_idx` partial index serves
+ * it. This is correct because pg-boss moves a failed-with-retries job to
+ * `retry` before its next attempt, so a superseded attempt is never frozen at
+ * `state = 'active'`; the retried-job test in `read.test.ts` pins that invariant.
+ */
 export async function listLongRunning(
   pool: Pool,
   opts: { queue?: string; longerThanSeconds?: number; limit?: number } = {},
