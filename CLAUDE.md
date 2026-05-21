@@ -13,7 +13,7 @@ The canonical scope document is **[issue #1](https://github.com/elfensky/pg-boss
 - **KISS.** Simple solutions only. Don't overengineer. Don't add abstractions for hypothetical future needs. Three similar lines beats a premature abstraction. When in doubt about an open question, default to the simpler choice and surface the tradeoff rather than silently picking a clever one.
 - **Report outcomes faithfully.** If lint, build, or tests fail, say so with the actual output. If you didn't run a verification step, say so — don't imply it ran. Never claim "all checks pass" when output shows failures. Never suppress or simplify failing checks to manufacture a green result. Never characterize incomplete or broken work as done.
 - **Keep docs in sync with code.** When a change affects `CLAUDE.md`, `CHANGELOG.md`, or an open issue, update the doc in the same change — not a separate follow-up. Stale docs are worse than no docs.
-- **Never push directly to `main`** (after the initial scaffolding commit). Feature work goes through a worktree → branch → merge, even for small changes. Exceptions are user-explicit only. See § Branching, worktrees, and Git workflow.
+- **Never commit feature work directly to `develop` or `main`.** Feature work goes through a worktree → branch → merge into `develop`, even for small changes. `main` only ever receives release commits (and hotfixes). Exceptions are user-explicit only. See § Branching, worktrees, and Git workflow.
 
 ## What pg-bossier is
 
@@ -119,34 +119,52 @@ If a task touches one of these and there's no companion issue, open one (or ask 
 ## Versioning and changelog
 
 - **Semantic Versioning** ([semver.org](https://semver.org/spec/v2.0.0/)) for releases. While on `0.x.y` the API is unstable — anything may break between minors. Promote to `1.0.0` only when the API surface is committed.
-- **Keep a Changelog** ([keepachangelog.com](https://keepachangelog.com/en/1.1.0/)) format in `CHANGELOG.md`. Every PR with user-visible changes adds an entry under `## [Unreleased]` using the standard sections (`Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`). Releases rename `[Unreleased]` to the dated version section and open a fresh `[Unreleased]`.
+- **Keep a Changelog** ([keepachangelog.com](https://keepachangelog.com/en/1.1.0/)) format in `CHANGELOG.md`. Every feature branch with user-visible changes adds an entry under `## [Unreleased]` (on `develop`) using the standard sections (`Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`).
+- **Version bump happens at release, not at feature merge.** Feature branches merge into `develop` *without* touching the version. When a release is cut — the squash of `develop` onto `main`, see § Branching — that single release commit bumps `package.json` + `package-lock.json` and renames `[Unreleased]` to the dated version section, opening a fresh `[Unreleased]`.
 - The `version` in `package.json` and the latest dated section in `CHANGELOG.md` must agree.
 
 ## Branching, worktrees, and Git workflow
 
-Single-trunk model: `main` is the release branch (what gets published to npm). All other work lives on short-lived branches checked out via worktree. If/when the project grows into needing a separate integration branch (`develop`), we'll add it — for now KISS.
+Two long-lived branches:
+
+- **`develop`** — the integration branch, and the repo's default branch. Full commit history: every feature branch merges here with `--no-ff`. All day-to-day work happens off `develop`.
+- **`main`** — the release ledger. One commit per release, each a squashed snapshot of `develop` at release time. `main` receives nothing else (except hotfixes). It is intentionally empty until the first release.
+
+Feature branches are short-lived, checked out via worktree off `develop`.
 
 **Default workflow (worktree per branch):**
 
-1. Create the worktree off `main` (run from the main checkout):
-   `git worktree add .worktrees/<branch-dir> -b <branch-name>`
+1. Create the worktree off `develop` (run from the main checkout):
+   `git worktree add .worktrees/<branch-dir> -b <branch-name> develop`
 2. `cd` into the worktree and install: `npm install`
 3. Do the work in the worktree directory — small, logical commits as you go (schema → impl → wire-up → tests), not one giant commit at the end
 4. Verify in the worktree before merging back: `npm run lint && npm run build && npm test`
-5. From the main checkout: `git checkout main && git merge --no-ff <branch-name>`
-6. **Version-on-merge.** Bump `package.json` version (minor for features, patch for fixes/refactors) and add the `CHANGELOG.md` entry in the **same commit as the code change** (or amend into the merge commit). Not a separate chore commit. The package.json↔CHANGELOG agreement rule from § Versioning and changelog still applies.
-7. Push: `git push`
+5. Merge into `develop` (from a `develop` checkout): `git merge --no-ff <branch-name>`. No version bump here.
+6. Make sure the change has a `CHANGELOG.md` entry under `## [Unreleased]` — see § Versioning and changelog.
+7. Push: `git push origin develop`
 8. Clean up: `git worktree remove .worktrees/<branch-dir>` + `git branch -d <branch-name>`
+
+**Release workflow (`develop` → `main`):**
+
+A release is a single squashed commit on `main` that snapshots `develop`:
+
+1. Snapshot `develop`'s tree onto `main` — a tree snapshot, **not** `git merge --squash`. `main` and `develop` have unrelated histories by design, so a real merge would conflict; the release takes `develop`'s tree wholesale.
+2. In that same release commit: bump `package.json` + `package-lock.json` (minor for features, patch for fixes), and rename `CHANGELOG.md`'s `[Unreleased]` to the dated version section, opening a fresh `[Unreleased]` back on `develop`.
+3. Commit on `main` as `Release X.Y.Z`; push `main`.
+4. `main` and `develop` diverge in the commit graph by design — the version number and `CHANGELOG.md` are the link between them, not git ancestry.
+
+**Hotfixes:** branch from `main`, fix, land on `main` as a patch release commit, then port the fix to `develop` (cherry-pick).
 
 **Worktree directory:** `.worktrees/` in project root (gitignored). Directory names mirror the branch name with slashes replaced by hyphens.
 
 **Commit and merge rules:**
 
-- **Never squash.** Always `--no-ff` or plain `--merge`. Full commit history must be preserved.
-- **No `--rebase` merges** for the same reason — preserve the branch shape.
+- **Feature → `develop` merges are `--no-ff`, never squashed.** `develop` preserves the full commit history.
+- **`develop` → `main` releases are squashed** — one commit per release. This is the *only* place squashing is used.
+- **No `--rebase` merges** into `develop` — preserve the branch shape.
 - **Commit incrementally on feature branches.** Each commit should be a coherent unit of progress that a reviewer (or a future you) can read independently.
 
-**Exception (direct-on-main):** Only when the user explicitly asks ("just do this quickly on main", "skip the worktree"). Realistic cases: docs-only updates, the initial scaffolding. If in doubt, use a worktree.
+**Exception (direct commits):** Trivial docs-only updates may go straight to `develop` when the user explicitly asks ("just do this quickly", "skip the worktree"). `main` never takes a direct commit outside the release/hotfix flow. If in doubt, use a worktree.
 
 ## Language
 
@@ -181,7 +199,7 @@ Formatter (Prettier or alternative) is deferred — that's a separate decision w
 - **Lint:** `npm run lint` — ESLint flat config (auto-fix: `npm run lint:fix`)
 - **Build:** `npm run build` — `tsc` emits to `dist/` (gitignored)
 - **Test:** `npm test` — runs `vitest run`. Integration tests live under `test/`, exercised against real Postgres + pg-boss via `@testcontainers/postgresql` (Docker required, no mocks). `vitest.config.ts` sets `fileParallelism: false` — one container per test file.
-- **CI:** `.github/workflows/ci.yml` runs `npm ci` → lint → build → test on every push to `main` and every pull request (`ubuntu-latest`, Node 22). The testcontainers suite runs on the runner's own Docker — no `services:` block. One Node / one pg-boss version for now; the pg-boss version matrix is tracked in issue #9.
+- **CI:** `.github/workflows/ci.yml` runs `npm ci` → lint → build → test on every push to `develop` or `main` and every pull request (`ubuntu-latest`, Node 22). The testcontainers suite runs on the runner's own Docker — no `services:` block. One Node / one pg-boss version for now; the pg-boss version matrix is tracked in issue #9.
 
 **Verify before claiming done.** Run `npm run lint && npm run build && npm test` before reporting a task complete. Order mirrors the CI workflow's fail-fast order: cheap checks first. If anything fails, report the actual output — don't suppress, don't simplify, don't claim success.
 

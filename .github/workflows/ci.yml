@@ -1,12 +1,12 @@
-# Lint, build, and run the integration suite on every push to main and every PR.
-# The suite uses @testcontainers/postgresql; Docker is preinstalled on the
-# ubuntu-latest runner, so no `services:` Postgres block is needed. One Node and
-# one pg-boss version for now — the pg-boss compatibility matrix is tracked in #9.
+# Lint, build, and run the integration suite on every push to develop or main
+# and every PR. The suite uses @testcontainers/postgresql; Docker is preinstalled
+# on the ubuntu-latest runner, so no `services:` Postgres block is needed. One
+# Node and one pg-boss version for now — the pg-boss matrix is tracked in #9.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [develop, main]
   pull_request:
 
 jobs:
