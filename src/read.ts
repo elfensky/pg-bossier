@@ -113,3 +113,94 @@ export async function getRetryHistory<TInput = unknown, TOutput = unknown>(
   );
   return rows.map((r) => mapRecord<TInput, TOutput>(r));
 }
+
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 1000;
+
+/** `WITH` body: the latest-attempt row of every job. */
+const RECORD_CURRENT = `
+  current AS (
+    SELECT DISTINCT ON (job_id) *
+    FROM pgbossier.record
+    ORDER BY job_id, attempt DESC
+  )`;
+
+const ORDER_COLUMNS = {
+  createdOn: 'created_on',
+  completedOn: 'completed_on',
+  capturedAt: 'captured_at',
+} as const;
+
+function resolveLimit(limit: number | undefined): number {
+  if (limit === undefined) return DEFAULT_LIMIT;
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error(`limit must be a positive integer, got ${String(limit)}`);
+  }
+  return Math.min(limit, MAX_LIMIT);
+}
+
+function resolveOffset(offset: number | undefined): number {
+  if (offset === undefined) return 0;
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error(`offset must be a non-negative integer, got ${String(offset)}`);
+  }
+  return offset;
+}
+
+/** Turn a JobFilter into a parameterized WHERE clause. Params start at $1. */
+function buildWhere(filter: JobFilter): { clause: string; params: unknown[] } {
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  const next = (): string => `$${params.length + 1}`;
+
+  if (filter.queue !== undefined) {
+    conds.push(`queue = ${next()}`);
+    params.push(filter.queue);
+  } else if (filter.queues !== undefined) {
+    conds.push(`queue = ANY(${next()})`);
+    params.push(filter.queues);
+  }
+  if (filter.states !== undefined) {
+    conds.push(`state = ANY(${next()})`);
+    params.push(filter.states);
+  }
+  if (filter.createdAfter !== undefined) {
+    conds.push(`created_on >= ${next()}`);
+    params.push(filter.createdAfter);
+  }
+  if (filter.createdBefore !== undefined) {
+    conds.push(`created_on < ${next()}`);
+    params.push(filter.createdBefore);
+  }
+  if (filter.completedAfter !== undefined) {
+    conds.push(`completed_on >= ${next()}`);
+    params.push(filter.completedAfter);
+  }
+  if (filter.completedBefore !== undefined) {
+    conds.push(`completed_on < ${next()}`);
+    params.push(filter.completedBefore);
+  }
+  return { clause: conds.length ? `WHERE ${conds.join(' AND ')}` : '', params };
+}
+
+/** Filtered, paginated job list over the current view, with an exact total. */
+export async function listJobs<TInput = unknown, TOutput = unknown>(
+  pool: Pool,
+  opts: ListJobsOpts = {},
+): Promise<{ rows: JobRecord<TInput, TOutput>[]; total: number }> {
+  const limit = resolveLimit(opts.limit);
+  const offset = resolveOffset(opts.offset);
+  const orderCol = ORDER_COLUMNS[opts.orderBy ?? 'createdOn'];
+  const { clause, params } = buildWhere(opts);
+  const { rows } = await pool.query<RawRecordRow & { total_count: string }>(
+    `WITH ${RECORD_CURRENT}
+     SELECT *, count(*) OVER () AS total_count
+     FROM current
+     ${clause}
+     ORDER BY ${orderCol} DESC NULLS LAST, job_id
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, limit, offset],
+  );
+  const total = rows.length > 0 ? Number(rows[0]!.total_count) : 0;
+  return { rows: rows.map((r) => mapRecord<TInput, TOutput>(r)), total };
+}
