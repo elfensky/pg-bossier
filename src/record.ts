@@ -8,10 +8,15 @@ export interface RecordPatch {
 }
 
 /**
- * Update the app-hook-owned columns of a record row. A plain UPDATE, not an
- * upsert: the capture trigger always creates the row first, so the app-hook
- * never needs the insert path — and this avoids the NOT NULL queue/state
- * columns. If no row exists yet, the UPDATE affects zero rows (a no-op).
+ * Update the app-hook-owned columns of a record row, keyed by
+ * `(jobId, attempt)`. A plain UPDATE, not an upsert — the capture trigger
+ * always creates the row first, so the insert path (and its NOT NULL
+ * queue/state columns) is never needed.
+ *
+ * A wrong `jobId`/`attempt` matches no row: the UPDATE is a silent no-op,
+ * not an error. Patch values must be valid `jsonb` — objects, arrays,
+ * numbers and booleans round-trip, but a bare JS string is rejected by
+ * Postgres; raw-string marshalling belongs to the Goal 6 write-path API.
  */
 export async function recordPatch(
   pool: Pool, jobId: string, attempt: number, patch: RecordPatch,

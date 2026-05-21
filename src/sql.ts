@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS pgbossier.record (
   created_on      timestamptz,
   started_on      timestamptz,
   completed_on    timestamptz,
-  captured_at     timestamptz NOT NULL DEFAULT now(),
+  captured_at     timestamptz NOT NULL DEFAULT now(),  -- first-capture time; never re-stamped
   PRIMARY KEY (job_id, attempt)
 );`;
 
@@ -43,10 +43,10 @@ BEGIN
       output       = EXCLUDED.output,
       created_on   = EXCLUDED.created_on,
       started_on   = EXCLUDED.started_on,
-      completed_on = EXCLUDED.completed_on,
-      captured_at  = EXCLUDED.captured_at;
+      completed_on = EXCLUDED.completed_on;
   EXCEPTION WHEN OTHERS THEN
-    NULL;
+    -- fail-open: log and continue — a capture failure must never abort the pg-boss operation
+    RAISE WARNING 'pgbossier: capture failed for job %: %', NEW.id, SQLERRM;
   END;
   RETURN NULL;
 END;

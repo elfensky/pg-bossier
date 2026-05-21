@@ -76,3 +76,18 @@ test('touch() heartbeats do not add or change record rows', async () => {
   expect(after).toHaveLength(before.length);
   expect(after[0]!.captured_at).toEqual(before[0]!.captured_at);
 });
+
+test('a job that exhausts its retries is captured as failed', async () => {
+  const queue = 'cap-failed';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 0 });
+
+  await h.boss.fetch(queue);
+  await h.boss.fail(queue, jobId!, { err: 'terminal' });
+
+  const rows = await getRecords(h.pool, jobId!);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.attempt).toBe(0);
+  expect(rows[0]!.state).toBe('failed');
+  expect(rows[0]!.output).toEqual({ err: 'terminal' });
+});
