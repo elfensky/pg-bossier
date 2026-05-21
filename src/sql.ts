@@ -24,6 +24,7 @@ export const RECORD_INDEXES_SQL: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS record_data_gin            ON pgbossier.record USING gin (data);`,
   `CREATE INDEX IF NOT EXISTS record_output_gin          ON pgbossier.record USING gin (output);`,
   `CREATE INDEX IF NOT EXISTS record_terminal_detail_gin ON pgbossier.record USING gin (terminal_detail);`,
+  `CREATE INDEX IF NOT EXISTS record_active_idx ON pgbossier.record (queue, started_on) WHERE state = 'active';`,
 ];
 
 export const CAPTURE_FUNCTION_SQL = `

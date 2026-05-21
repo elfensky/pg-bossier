@@ -18,7 +18,7 @@ test('install creates the pgbossier.record table with all 13 columns', async () 
   );
 });
 
-test('install creates the five record indexes', async () => {
+test('install creates the base record indexes', async () => {
   const { rows } = await h.pool.query<{ indexname: string }>(
     `SELECT indexname FROM pg_indexes WHERE schemaname = 'pgbossier' AND tablename = 'record'`,
   );
@@ -35,4 +35,11 @@ test('install creates the pgbossier_capture trigger on pgboss.job', async () => 
      WHERE tgrelid = 'pgboss.job'::regclass AND NOT tgisinternal`,
   );
   expect(rows.map((r) => r.tgname)).toContain('pgbossier_capture');
+});
+
+test('install creates the record_active_idx partial index', async () => {
+  const { rows } = await h.pool.query<{ indexname: string }>(
+    `SELECT indexname FROM pg_indexes WHERE schemaname = 'pgbossier' AND tablename = 'record'`,
+  );
+  expect(rows.map((r) => r.indexname)).toContain('record_active_idx');
 });
