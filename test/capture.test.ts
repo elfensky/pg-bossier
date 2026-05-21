@@ -61,3 +61,18 @@ test('a job that fails twice then completes yields three attempt rows', async ()
   expect(rows[2]!.state).toBe('completed');
   expect(rows[2]!.output).toEqual({ ok: true });
 });
+
+test('touch() heartbeats do not add or change record rows', async () => {
+  const queue = 'cap-touch';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {});
+  await h.boss.fetch(queue); // -> active
+  const before = await getRecords(h.pool, jobId!);
+
+  await h.boss.touch(queue, jobId!);
+  await h.boss.touch(queue, jobId!);
+
+  const after = await getRecords(h.pool, jobId!);
+  expect(after).toHaveLength(before.length);
+  expect(after[0]!.captured_at).toEqual(before[0]!.captured_at);
+});
