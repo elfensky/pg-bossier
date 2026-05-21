@@ -43,3 +43,22 @@ test('app-hook columns survive a later capture-trigger re-fire', async () => {
   expect(rows[0]!.state).toBe('active');          // trigger updated its own column
   expect(rows[0]!.progress).toEqual({ done: 7 }); // app-hook column was NOT clobbered
 });
+
+test('the client exposes the read methods bound to its pool', async () => {
+  const queue = 'client-read';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, { via: 'client' });
+
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  const job = await client.findById(jobId!);
+  expect(job!.jobId).toBe(jobId);
+
+  const listed = await client.listJobs({ queue });
+  expect(listed.total).toBe(1);
+
+  expect(typeof client.getRetryHistory).toBe('function');
+  expect(typeof client.latestPerQueue).toBe('function');
+  expect(typeof client.countByState).toBe('function');
+  expect(typeof client.countByQueue).toBe('function');
+  expect(typeof client.listLongRunning).toBe('function');
+});
