@@ -36,3 +36,28 @@ test('cancel is mirrored', async () => {
   const rows = await getRecords(h.pool, jobId!);
   expect(rows[0]!.state).toBe('cancelled');
 });
+
+test('a job that fails twice then completes yields three attempt rows', async () => {
+  const queue = 'cap-retry';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 2 });
+
+  // attempt 0
+  await h.boss.fetch(queue);
+  await h.boss.fail(queue, jobId!, { err: 'fail-0' });
+  // attempt 1
+  await h.boss.fetch(queue);
+  await h.boss.fail(queue, jobId!, { err: 'fail-1' });
+  // attempt 2
+  await h.boss.fetch(queue);
+  await h.boss.complete(queue, jobId!, { ok: true });
+
+  const rows = await getRecords(h.pool, jobId!);
+  expect(rows.map((r) => r.attempt)).toEqual([0, 1, 2]);
+  expect(rows[0]!.state).toBe('retry');
+  expect(rows[0]!.output).toEqual({ err: 'fail-0' });
+  expect(rows[1]!.state).toBe('retry');
+  expect(rows[1]!.output).toEqual({ err: 'fail-1' });
+  expect(rows[2]!.state).toBe('completed');
+  expect(rows[2]!.output).toEqual({ ok: true });
+});
