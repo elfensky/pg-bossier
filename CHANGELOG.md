@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-21
+
+### Added
+
+- GitHub Actions CI workflow (`.github/workflows/ci.yml`) — runs lint, build, and the integration suite on every push to `main` and every pull request.
+- `package.json` `exports`, `main`, `types`, `files`, and `engines` fields, plus a `prepare` build hook — `import` from `pg-bossier` now resolves, the published tarball is scoped to `dist/`, and the gitignored `dist/` is built automatically on publish and on git-dependency installs.
+- `README.md` — install instructions, a usage example, requirements, and project status.
+- `COMPATIBILITY.md` — pg-boss compatibility tiers (Stable / Transitional / Forbidden) for every pg-boss surface the substrate depends on.
+- `LICENSE` — MIT license file (the license was already declared in `package.json`).
+
+### Changed
+
+- The integration test harness constructs pg-boss with `supervise: false` and `schedule: false`, so its maintenance loop and cron scheduler no longer perturb `count(*)` assertions during tests.
+
 ## [0.1.0] - 2026-05-21
 
 ### Added
