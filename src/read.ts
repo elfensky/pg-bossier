@@ -251,6 +251,37 @@ export async function countByQueue(
   return result;
 }
 
+const DEFAULT_LONG_RUNNING_SECONDS = 900;
+
+/** Active jobs whose started_on is older than a threshold (default 900s). */
+export async function listLongRunning(
+  pool: Pool,
+  opts: { queue?: string; longerThanSeconds?: number; limit?: number } = {},
+): Promise<JobRecord[]> {
+  const limit = resolveLimit(opts.limit);
+  const seconds = opts.longerThanSeconds ?? DEFAULT_LONG_RUNNING_SECONDS;
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    throw new Error(
+      `longerThanSeconds must be a non-negative number, got ${String(seconds)}`,
+    );
+  }
+  const params: unknown[] = [seconds];
+  let queueClause = '';
+  if (opts.queue !== undefined) {
+    params.push(opts.queue);
+    queueClause = `AND queue = $${params.length}`;
+  }
+  const { rows } = await pool.query<RawRecordRow>(
+    `SELECT * FROM pgbossier.record
+     WHERE state = 'active' ${queueClause}
+       AND started_on < now() - make_interval(secs => $1)
+     ORDER BY started_on ASC, job_id
+     LIMIT $${params.length + 1}`,
+    [...params, limit],
+  );
+  return rows.map((r) => mapRecord(r));
+}
+
 /** Filtered, paginated job list over the current view, with an exact total. */
 export async function listJobs<TInput = unknown, TOutput = unknown>(
   pool: Pool,

@@ -1,7 +1,7 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 import { install } from '../src/install.js';
-import { findById, getRetryHistory, listJobs, latestPerQueue, countByState, countByQueue } from '../src/read.js';
+import { findById, getRetryHistory, listJobs, latestPerQueue, countByState, countByQueue, listLongRunning } from '../src/read.js';
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -197,4 +197,47 @@ test('countByQueue counts jobs per queue, with a state filter', async () => {
     states: ['failed'],
   });
   expect(counts).toEqual({ [qa]: 2, [qb]: 1 });
+});
+
+test('listLongRunning returns active jobs older than the threshold', async () => {
+  const queue = 'read-llr';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {});
+  await h.boss.fetch(queue); // -> active
+
+  const running = await listLongRunning(h.pool, { queue, longerThanSeconds: 0 });
+  expect(running.map((r) => r.jobId)).toContain(jobId);
+  expect(running.every((r) => r.state === 'active')).toBe(true);
+});
+
+test('listLongRunning excludes a freshly-started job under a large threshold', async () => {
+  const queue = 'read-llr-fresh';
+  await h.boss.createQueue(queue);
+  await h.boss.send(queue, {});
+  await h.boss.fetch(queue); // -> active, started just now
+
+  const running = await listLongRunning(h.pool, { queue, longerThanSeconds: 3600 });
+  expect(running).toHaveLength(0);
+});
+
+test('listLongRunning query is served by record_active_idx, not a seq scan', async () => {
+  const client = await h.pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL enable_seqscan = off');
+    const { rows } = await client.query<{ 'QUERY PLAN': unknown }>(
+      `EXPLAIN (FORMAT JSON)
+       SELECT * FROM pgbossier.record
+       WHERE state = 'active' AND queue = $1
+         AND started_on < now() - make_interval(secs => $2)
+       ORDER BY started_on ASC, job_id
+       LIMIT 100`,
+      ['read-llr', 0],
+    );
+    const plan = JSON.stringify(rows[0]!['QUERY PLAN']);
+    expect(plan).toContain('record_active_idx');
+  } finally {
+    await client.query('ROLLBACK').catch(() => undefined);
+    client.release();
+  }
 });
