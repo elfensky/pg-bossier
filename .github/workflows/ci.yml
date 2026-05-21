@@ -1,0 +1,25 @@
+# Lint, build, and run the integration suite on every push to main and every PR.
+# The suite uses @testcontainers/postgresql; Docker is preinstalled on the
+# ubuntu-latest runner, so no `services:` Postgres block is needed. One Node and
+# one pg-boss version for now — the pg-boss compatibility matrix is tracked in #9.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
