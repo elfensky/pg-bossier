@@ -1,7 +1,7 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 import { install } from '../src/install.js';
-import { findById, getRetryHistory, listJobs, latestPerQueue } from '../src/read.js';
+import { findById, getRetryHistory, listJobs, latestPerQueue, countByState } from '../src/read.js';
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -148,4 +148,29 @@ test('latestPerQueue returns the most recent job per queue', async () => {
 test('latestPerQueue returns an empty array for an empty queue list', async () => {
   const rows = await latestPerQueue(h.pool, []);
   expect(rows).toEqual([]);
+});
+
+test('countByState counts each job once by its current state, all six keys present', async () => {
+  const queue = 'read-cbs';
+  await h.boss.createQueue(queue);
+
+  // 2 completed (send+fetch+complete each, no other jobs in queue yet)
+  for (let i = 0; i < 2; i++) {
+    const id = await h.boss.send(queue, {});
+    await h.boss.fetch(queue);
+    await h.boss.complete(queue, id!, {});
+  }
+  // 1 retried-then-completed -> current state is 'completed', not 'retry'
+  const retried = await h.boss.send(queue, {}, { retryLimit: 1 });
+  await h.boss.fetch(queue);
+  await h.boss.fail(queue, retried!, { err: 'x' });
+  await h.boss.fetch(queue);
+  await h.boss.complete(queue, retried!, {});
+  // 1 created (sent last so fetch+complete above can't race with it)
+  await h.boss.send(queue, {});
+
+  const counts = await countByState(h.pool, { queue });
+  expect(counts).toEqual({
+    created: 1, active: 0, retry: 0, completed: 3, cancelled: 0, failed: 0,
+  });
 });

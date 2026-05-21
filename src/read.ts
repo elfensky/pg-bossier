@@ -207,6 +207,31 @@ export async function latestPerQueue(
   return rows.map((r) => mapRecord(r));
 }
 
+const ALL_STATES: readonly JobState[] = [
+  'created', 'active', 'retry', 'completed', 'cancelled', 'failed',
+];
+
+/** Job counts by current state. Zero-fills all six states. */
+export async function countByState(
+  pool: Pool,
+  filter: JobFilter = {},
+): Promise<Record<JobState, number>> {
+  const { clause, params } = buildWhere(filter);
+  const { rows } = await pool.query<{ state: JobState; count: number }>(
+    `WITH ${RECORD_CURRENT}
+     SELECT state, count(*)::int AS count
+     FROM current
+     ${clause}
+     GROUP BY state`,
+    params,
+  );
+  const result = Object.fromEntries(
+    ALL_STATES.map((s) => [s, 0]),
+  ) as Record<JobState, number>;
+  for (const row of rows) result[row.state] = row.count;
+  return result;
+}
+
 /** Filtered, paginated job list over the current view, with an exact total. */
 export async function listJobs<TInput = unknown, TOutput = unknown>(
   pool: Pool,
