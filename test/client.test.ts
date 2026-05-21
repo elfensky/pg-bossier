@@ -27,3 +27,19 @@ test('the wrapping client delegates pg-boss methods', async () => {
   expect(typeof client.boss.send).toBe('function');
   expect(client.boss).toBe(h.boss);
 });
+
+test('app-hook columns survive a later capture-trigger re-fire', async () => {
+  const queue = 'client-survive';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, { in: 2 });
+
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  await client.recordPatch(jobId!, 0, { progress: { done: 7 } });
+
+  // a state change re-fires the capture trigger (ON CONFLICT DO UPDATE)
+  await h.boss.fetch(queue); // created -> active
+
+  const rows = await getRecords(h.pool, jobId!);
+  expect(rows[0]!.state).toBe('active');          // trigger updated its own column
+  expect(rows[0]!.progress).toEqual({ done: 7 }); // app-hook column was NOT clobbered
+});
