@@ -28,3 +28,11 @@ test('install creates the five record indexes', async () => {
     expect(idx).toContain(name);
   }
 });
+
+test('install creates the pgbossier_capture trigger on pgboss.job', async () => {
+  const { rows } = await h.pool.query<{ tgname: string }>(
+    `SELECT tgname FROM pg_trigger
+     WHERE tgrelid = 'pgboss.job'::regclass AND NOT tgisinternal`,
+  );
+  expect(rows.map((r) => r.tgname)).toContain('pgbossier_capture');
+});

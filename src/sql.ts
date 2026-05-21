@@ -25,3 +25,35 @@ export const RECORD_INDEXES_SQL: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS record_output_gin          ON pgbossier.record USING gin (output);`,
   `CREATE INDEX IF NOT EXISTS record_terminal_detail_gin ON pgbossier.record USING gin (terminal_detail);`,
 ];
+
+export const CAPTURE_FUNCTION_SQL = `
+CREATE OR REPLACE FUNCTION pgbossier.capture() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  BEGIN
+    INSERT INTO pgbossier.record
+      (job_id, queue, attempt, state, data, output,
+       created_on, started_on, completed_on, captured_at)
+    VALUES
+      (NEW.id, NEW.name, NEW.retry_count, NEW.state, NEW.data, NEW.output,
+       NEW.created_on, NEW.started_on, NEW.completed_on, now())
+    ON CONFLICT (job_id, attempt) DO UPDATE SET
+      state        = EXCLUDED.state,
+      data         = EXCLUDED.data,
+      output       = EXCLUDED.output,
+      created_on   = EXCLUDED.created_on,
+      started_on   = EXCLUDED.started_on,
+      completed_on = EXCLUDED.completed_on,
+      captured_at  = EXCLUDED.captured_at;
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+  RETURN NULL;
+END;
+$$;`;
+
+export const CAPTURE_TRIGGER_SQL = `
+DROP TRIGGER IF EXISTS pgbossier_capture ON pgboss.job;
+CREATE TRIGGER pgbossier_capture
+  AFTER INSERT OR UPDATE OF state ON pgboss.job
+  FOR EACH ROW EXECUTE FUNCTION pgbossier.capture();`;
