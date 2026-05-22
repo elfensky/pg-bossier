@@ -1,5 +1,7 @@
 export const SCHEMA_SQL = `CREATE SCHEMA IF NOT EXISTS pgbossier;`;
 
+export const SEQUENCE_SQL = `CREATE SEQUENCE IF NOT EXISTS pgbossier.record_seq;`;
+
 export const RECORD_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS pgbossier.record (
   job_id          uuid        NOT NULL,
@@ -26,6 +28,13 @@ export const RECORD_INDEXES_SQL: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS record_terminal_detail_gin ON pgbossier.record USING gin (terminal_detail);`,
   `CREATE INDEX IF NOT EXISTS record_active_idx ON pgbossier.record (queue, started_on) WHERE state = 'active';`,
 ];
+
+export const RECORD_SEQ_COLUMN_SQL = `
+ALTER TABLE pgbossier.record
+  ADD COLUMN IF NOT EXISTS seq BIGINT NOT NULL DEFAULT nextval('pgbossier.record_seq');`;
+
+export const RECORD_SEQ_INDEX_SQL =
+  `CREATE INDEX IF NOT EXISTS record_seq_idx ON pgbossier.record (seq);`;
 
 export const CAPTURE_FUNCTION_SQL = `
 CREATE OR REPLACE FUNCTION pgbossier.capture() RETURNS trigger
