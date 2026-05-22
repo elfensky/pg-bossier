@@ -4,11 +4,65 @@
 
 An operational data plane for [pg-boss](https://github.com/timgit/pg-boss) — forensic job history, typed failure detail, retry lineage, mid-job progress, and lifecycle events. pg-bossier **layers on top of** pg-boss: it extends pg-boss, and never replaces it.
 
-> **Status — pre-release.** Not yet published to npm; the package sits at `0.0.0`. In place today: the forensic storage layer (Goal 1) — a `pgbossier.record` table that mirrors every `pgboss.job` state transition and preserves it permanently, surviving pg-boss's in-place row deletion — and the operational read API (Goal 5): typed methods like `findById`, `listJobs`, `getRetryHistory`, and state counts. Typed failure detail, mid-job progress, and lifecycle events are still to come. See [issue #1](https://github.com/elfensky/pg-bossier/issues/1) for the full scope and per-goal status.
+> **Status — pre-release.** Not yet published to npm; the package sits at `0.0.0`. Permanent job history and the typed query API work today; typed failure detail, mid-job progress, and lifecycle events are in progress. Per-feature status is in [Features](#features) below; the full scope lives in [issue #1](https://github.com/elfensky/pg-bossier/issues/1).
 
 ## Why
 
 pg-boss deletes job rows in place. Once a job finishes and its retention window passes, the row is gone; a retried job is `DELETE`+`INSERT`ed under the same id. That makes "what happened to job X six months ago?" unanswerable. pg-bossier installs one trigger that copies every state transition into an append-only table you own, so the history outlives pg-boss's cleanup.
+
+## Features
+
+pg-bossier is nine concrete capabilities — the goals tracked in [issue #1](https://github.com/elfensky/pg-bossier/issues/1). Status: ✅ available today · 🟡 in progress · ⬜ planned.
+
+| Capability | What you get | Status |
+| --- | --- | --- |
+| **Permanent job history** | Every job and every state change kept forever — answerable even after pg-boss has deleted the original row. | ✅ |
+| **Typed query API** | Typed methods to look jobs up, list and filter them, and count them by state or queue — no hand-written SQL. | ✅ |
+| **Retry history** | Every attempt of a retried job preserved as its own record, with one method for the full ordered history. | ✅ |
+| **One-step install, clean uninstall** | Adoption is one dependency and one migration; removal drops a single schema and leaves pg-boss untouched. | ✅ |
+| **pg-boss compatibility contract** | A documented tier system naming which pg-boss surfaces pg-bossier depends on and how stable each is. | ✅ |
+| **Typed failure detail** | A structured, queryable reason for every finished job — with a temporary-vs-permanent label on failures. | 🟡 |
+| **Input snapshots** | An optional slot to record what data a job saw when it ran, so its inputs stay recoverable. | 🟡 |
+| **Mid-job progress** | A progress value a worker updates while a job runs, surviving crashes and retries. | 🟡 |
+| **Lifecycle events** | Subscribe to job state changes as they happen, instead of polling for them. | ⬜ |
+
+🟡 capabilities are partly usable now — the storage that backs them works today, while their typed APIs are still being designed.
+
+## How it works
+
+pg-bossier never sits between your application and pg-boss — you keep calling pg-boss exactly as before. The history is captured inside PostgreSQL itself:
+
+```mermaid
+flowchart TD
+    subgraph app["Your application process"]
+        Code["Your code"]
+        Boss["pg-boss"]
+        Client["bossier client"]
+    end
+
+    subgraph db["PostgreSQL"]
+        Job[("pgboss.job<br/>job rows — deleted on<br/>retention and on retry")]
+        Trigger{{"pgbossier<br/>capture trigger"}}
+        Record[("pgbossier.record<br/>append-only history<br/>kept forever")]
+    end
+
+    Code -->|"queue and work jobs"| Boss
+    Boss -->|"create · update state · delete"| Job
+    Job -->|"every create and state change"| Trigger
+    Trigger -->|"mirror the row — one per attempt"| Record
+    Record -->|"look up · list · count"| Client
+    Client -->|"typed job history"| Code
+    Code -.->|"your own job data"| Client
+    Client -.->|"progress · detail · input snapshot"| Record
+```
+
+1. **Your app runs jobs through pg-boss as usual.** pg-bossier changes nothing about how you queue or work jobs.
+2. **pg-boss manages its own `pgboss.job` table** — creating rows, updating their state, and deleting them once a retention window passes or a retry replaces them.
+3. **A capture trigger mirrors every change.** Each time a job is created or changes state, pg-bossier copies that row into its own `pgbossier.record` table — one row per attempt, so retries are preserved rather than overwritten.
+4. **The history outlives pg-boss's cleanup.** When pg-boss deletes a job row, `pgbossier.record` is left untouched — the history stays.
+5. **You read history through the `bossier` client.** Its query methods only ever read `pgbossier.record`, so they keep answering long after the original `pgboss.job` row is gone.
+
+The capture is fail-open: if it ever errors, the failure is logged and skipped — it never blocks the pg-boss operation that triggered it.
 
 ## Requirements
 
