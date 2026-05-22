@@ -142,13 +142,42 @@ const stalled = await client.listLongRunning({ longerThanSeconds: 600 });
 
 ### Writing pg-bossier-owned columns
 
-`recordPatch` writes the columns the capture trigger leaves for the application — `progress`, `terminal_detail`, and `input_snapshot`. It targets a single attempt, keyed by job id and attempt number (pg-boss's `retry_count` — `0` on the first try):
+`recordPatch` writes the columns the capture trigger leaves for the application — `terminal_detail` and `input_snapshot`. It targets a single attempt, keyed by job id and attempt number (pg-boss's `retry_count` — `0` on the first try):
 
 ```ts
-await client.recordPatch(jobId, 0, { progress: { done: 3, total: 10 } });
+await client.recordPatch(jobId, 0, { input_snapshot: { userId: 42 } });
 ```
 
-Values must be valid JSON — objects, arrays, numbers, and booleans. The typed write APIs for these columns land with Goals 2, 4, and 6.
+The typed write APIs for these columns land with Goals 2 and 4.
+
+### Job progress
+
+`setProgress` writes a job's current progress to its active attempt. A worker only needs `job.id` — the target attempt is resolved server-side. Pass any JSON-serializable value: a structured object, a bare string, a number. The call is fail-open: a runtime error logs a warning and resolves without throwing, so a failed progress write never fails the consumer's job. Progress values survive pg-boss retries — each attempt has its own row, so a prior attempt's final checkpoint remains readable even after the job has been retried.
+
+```ts
+// inside a pg-boss work() handler
+await client.setProgress(job.id, { processed: 1200, total: 5000 });
+```
+
+`getProgress` returns the most-recent non-null progress value across all attempts, plus the attempt it came from. Returns `null` if the job is unknown or no attempt has written progress yet.
+
+```ts
+const result = await client.getProgress(jobId);
+// { progress: { processed: 1200, total: 5000 }, attempt: 0 }
+// or null
+
+// typed variant
+const typed = await client.getProgress<{ processed: number; total: number }>(jobId);
+```
+
+The returned `attempt` is useful for the resumable-job pattern: a new attempt's row starts `null`, so if `getProgress` returns a value whose `attempt` is lower than the current attempt, it is a prior attempt's final checkpoint to resume from. A display-only job can ignore the `attempt` field.
+
+The exported type is `ProgressResult<TProgress>`:
+
+```ts
+import type { ProgressResult } from 'pg-bossier';
+// { progress: TProgress; attempt: number }
+```
 
 ### Uninstall
 
