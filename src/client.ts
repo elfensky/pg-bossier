@@ -12,9 +12,12 @@ export interface BossierOptions {
   pool: Pool;
 }
 
-export interface BossierClient {
-  /** The underlying pg-boss instance — its queue ops are used unchanged. */
-  boss: PgBoss;
+/**
+ * pg-bossier's own methods — the surface added on top of pg-boss's API:
+ * `recordPatch` for the app-hook-owned columns, and the Goal 5 operational
+ * read methods. All reads run on the `pool` passed to `bossier()`.
+ */
+export interface BossierMethods {
   /** Write the app-hook-owned columns of a record row. */
   recordPatch: (jobId: string, attempt: number, patch: RecordPatch) => Promise<void>;
   /** A job's latest attempt, across all queues. `null` if never captured. */
@@ -45,14 +48,26 @@ export interface BossierClient {
 }
 
 /**
- * The pg-bossier client: the pg-boss instance for queue ops, `recordPatch` for
- * the app-hook columns, and the Goal 5 operational read methods. All reads run
- * on the supplied `pool`.
+ * The unified pg-bossier client: every pg-boss method (forwarded to the
+ * wrapped instance) plus pg-bossier's own `BossierMethods`, on one flat
+ * surface. Returned by `bossier()`.
  */
-export function bossier(options: BossierOptions): BossierClient {
+export type Bossier = PgBoss & BossierMethods;
+
+/**
+ * Wrap a started pg-boss instance into a single client that exposes pg-boss's
+ * whole API alongside pg-bossier's methods.
+ *
+ * The client is a `Proxy` over `boss`: a `BossierMethods` call resolves to
+ * pg-bossier's implementation; every other property is forwarded to `boss`.
+ * Forwarded functions are bound to `boss` — pg-boss 12 uses `#private` fields,
+ * which throw if a method runs with `this` set to the proxy rather than the
+ * instance.
+ */
+export function bossier(options: BossierOptions): Bossier {
   const { boss, pool } = options;
-  return {
-    boss,
+
+  const methods: BossierMethods = {
     recordPatch: (jobId, attempt, patch) => recordPatch(pool, jobId, attempt, patch),
     findById: <TInput = unknown, TOutput = unknown>(jobId: string) =>
       findById<TInput, TOutput>(pool, jobId),
@@ -65,4 +80,22 @@ export function bossier(options: BossierOptions): BossierClient {
     countByQueue: (filter) => countByQueue(pool, filter),
     listLongRunning: (opts) => listLongRunning(pool, opts),
   };
+  const methodNames = new Set(Object.keys(methods));
+
+  return new Proxy(boss, {
+    get(target, prop) {
+      if (typeof prop === 'string' && methodNames.has(prop)) {
+        return methods[prop as keyof BossierMethods];
+      }
+      const member: unknown = Reflect.get(target, prop, target);
+      if (typeof member === 'function') {
+        // A bound method that returns `this` (e.g. EventEmitter `on` / `once`)
+        // returns the raw instance, not the proxy — chaining is unaffected
+        // because both resolve the same object.
+        const fn = member as (...args: unknown[]) => unknown;
+        return fn.bind(target);
+      }
+      return member;
+    },
+  }) as Bossier;
 }
