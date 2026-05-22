@@ -1,6 +1,7 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
+import pg from 'pg';
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -90,4 +91,58 @@ test('a job that exhausts its retries is captured as failed', async () => {
   expect(rows[0]!.attempt).toBe(0);
   expect(rows[0]!.state).toBe('failed');
   expect(rows[0]!.output).toEqual({ err: 'terminal' });
+});
+
+test('record.seq advances on every transition (INSERT and UPDATE)', async () => {
+  const queue = 'cap-seq';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {});
+
+  let rows = await getRecords(h.pool, jobId!);
+  const seqAfterCreated = BigInt((rows[0] as unknown as { seq: string }).seq);
+
+  await h.boss.fetch(queue);
+  rows = await getRecords(h.pool, jobId!);
+  const seqAfterActive = BigInt((rows[0] as unknown as { seq: string }).seq);
+
+  await h.boss.complete(queue, jobId!, { ok: true });
+  rows = await getRecords(h.pool, jobId!);
+  const seqAfterCompleted = BigInt((rows[0] as unknown as { seq: string }).seq);
+
+  expect(seqAfterActive).toBeGreaterThan(seqAfterCreated);
+  expect(seqAfterCompleted).toBeGreaterThan(seqAfterActive);
+});
+
+test('trigger publishes pg_notify on pgbossier_job with identity + seq', async () => {
+  const queue = 'cap-notify';
+  await h.boss.createQueue(queue);
+
+  const listener = new pg.Client({
+    connectionString: (h.pool as unknown as { options: { connectionString: string } }).options.connectionString,
+  });
+  await listener.connect();
+  await listener.query('LISTEN pgbossier_job');
+  const received: { channel: string; payload: string | undefined }[] = [];
+  listener.on('notification', (msg) => {
+    received.push({ channel: msg.channel, payload: msg.payload });
+  });
+
+  const jobId = await h.boss.send(queue, { hello: 'evt' });
+  await h.boss.fetch(queue);
+  await h.boss.complete(queue, jobId!, { ok: true });
+  await new Promise((r) => setTimeout(r, 100));
+
+  const forQueue = received
+    .map((ev) => ({ ...ev, parsed: JSON.parse(ev.payload!) as Record<string, unknown> }))
+    .filter((ev) => ev.parsed.queue === queue);
+  expect(forQueue).toHaveLength(3);
+  for (const ev of forQueue) {
+    expect(ev.channel).toBe('pgbossier_job');
+    expect(ev.parsed.job_id).toBe(jobId);
+    expect(typeof ev.parsed.attempt).toBe('number');
+    expect(typeof ev.parsed.state).toBe('string');
+    expect(typeof ev.parsed.seq).toBe('number');
+    expect(typeof ev.parsed.captured_at).toBe('string');
+  }
+  await listener.end();
 });

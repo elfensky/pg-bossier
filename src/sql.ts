@@ -39,23 +39,40 @@ export const RECORD_SEQ_INDEX_SQL =
 export const CAPTURE_FUNCTION_SQL = `
 CREATE OR REPLACE FUNCTION pgbossier.capture() RETURNS trigger
 LANGUAGE plpgsql AS $$
+DECLARE
+  new_seq bigint;
 BEGIN
   BEGIN
+    new_seq := nextval('pgbossier.record_seq');
+
     INSERT INTO pgbossier.record
       (job_id, queue, attempt, state, data, output,
-       created_on, started_on, completed_on, captured_at)
+       created_on, started_on, completed_on, captured_at, seq)
     VALUES
       (NEW.id, NEW.name, NEW.retry_count, NEW.state, NEW.data, NEW.output,
-       NEW.created_on, NEW.started_on, NEW.completed_on, now())
+       NEW.created_on, NEW.started_on, NEW.completed_on, now(), new_seq)
     ON CONFLICT (job_id, attempt) DO UPDATE SET
       state        = EXCLUDED.state,
       data         = EXCLUDED.data,
       output       = EXCLUDED.output,
       created_on   = EXCLUDED.created_on,
       started_on   = EXCLUDED.started_on,
-      completed_on = EXCLUDED.completed_on;
+      completed_on = EXCLUDED.completed_on,
+      seq          = new_seq;
+
+    PERFORM pg_notify(
+      'pgbossier_job',
+      json_build_object(
+        'job_id',      NEW.id,
+        'queue',       NEW.name,
+        'attempt',     NEW.retry_count,
+        'state',       NEW.state,
+        'seq',         new_seq,
+        'captured_at', now()
+      )::text
+    );
   EXCEPTION WHEN OTHERS THEN
-    -- fail-open: log and continue — a capture failure must never abort the pg-boss operation
+    -- fail-open per issue #1: log and continue.
     RAISE WARNING 'pgbossier: capture failed for job %: %', NEW.id, SQLERRM;
   END;
   RETURN NULL;
