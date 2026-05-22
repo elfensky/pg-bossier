@@ -1,6 +1,7 @@
 import type { PgBoss } from 'pg-boss';
 import type { Pool } from 'pg';
 import { recordPatch, type RecordPatch } from './record.js';
+import { setProgress, getProgress, type ProgressResult } from './progress.js';
 import {
   findById, getRetryHistory, listJobs, latestPerQueue,
   countByState, countByQueue, listLongRunning,
@@ -14,8 +15,9 @@ export interface BossierOptions {
 
 /**
  * pg-bossier's own methods — the surface added on top of pg-boss's API:
- * `recordPatch` for the app-hook-owned columns, and the Goal 5 operational
- * read methods. All reads run on the `pool` passed to `bossier()`.
+ * `recordPatch` for the app-hook-owned columns, the Goal 5 operational read
+ * methods, and the Goal 6 progress methods (`setProgress` / `getProgress`).
+ * All run on the `pool` passed to `bossier()`.
  */
 export interface BossierMethods {
   /** Write the app-hook-owned columns of a record row. */
@@ -45,6 +47,12 @@ export interface BossierMethods {
   listLongRunning: (
     opts?: { queue?: string; longerThanSeconds?: number; limit?: number },
   ) => Promise<JobRecord[]>;
+  /** Write a job's progress to its current attempt. */
+  setProgress: (jobId: string, progress: unknown) => Promise<void>;
+  /** A job's effective progress — most-recent non-null, with its source attempt. */
+  getProgress: <TProgress = unknown>(
+    jobId: string,
+  ) => Promise<ProgressResult<TProgress> | null>;
 }
 
 /**
@@ -79,6 +87,9 @@ export function bossier(options: BossierOptions): Bossier {
     countByState: (filter) => countByState(pool, filter),
     countByQueue: (filter) => countByQueue(pool, filter),
     listLongRunning: (opts) => listLongRunning(pool, opts),
+    setProgress: (jobId, progress) => setProgress(pool, jobId, progress),
+    getProgress: <TProgress = unknown>(jobId: string) =>
+      getProgress<TProgress>(pool, jobId),
   };
   const methodNames = new Set(Object.keys(methods));
 
