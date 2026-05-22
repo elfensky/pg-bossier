@@ -30,14 +30,14 @@ pg-bossier is nine concrete capabilities — the goals tracked in [issue #1](htt
 
 ## How it works
 
-pg-bossier never sits between your application and pg-boss — you keep calling pg-boss exactly as before. The history is captured inside PostgreSQL itself:
+pg-bossier gives you a single client that wraps pg-boss: you call queue operations on it just as you would on pg-boss, and pg-bossier's own methods sit right alongside them. The job history is captured separately, inside PostgreSQL — by a database trigger, not by the client:
 
 ```mermaid
 flowchart TD
     subgraph app["Your application process"]
         Code["Your code"]
+        Client["bossier client<br/>one unified surface"]
         Boss["pg-boss"]
-        Client["bossier client"]
     end
 
     subgraph db["PostgreSQL"]
@@ -46,17 +46,17 @@ flowchart TD
         Record[("pgbossier.record<br/>append-only history<br/>kept forever")]
     end
 
-    Code -->|"queue and work jobs"| Boss
+    Code -->|"queue ops and history calls"| Client
+    Client -->|"queue ops forwarded"| Boss
     Boss -->|"create · update state · delete"| Job
     Job -->|"every create and state change"| Trigger
     Trigger -->|"mirror the row — one per attempt"| Record
     Record -->|"look up · list · count"| Client
     Client -->|"typed job history"| Code
-    Code -.->|"your own job data"| Client
     Client -.->|"progress · detail · input snapshot"| Record
 ```
 
-1. **Your app runs jobs through pg-boss as usual.** pg-bossier changes nothing about how you queue or work jobs.
+1. **Your app runs jobs through the `bossier` client.** It forwards every pg-boss queue operation to pg-boss unchanged — pg-bossier extends pg-boss's API, it never replaces it.
 2. **pg-boss manages its own `pgboss.job` table** — creating rows, updating their state, and deleting them once a retention window passes or a retry replaces them.
 3. **A capture trigger mirrors every change.** Each time a job is created or changes state, pg-bossier copies that row into its own `pgbossier.record` table — one row per attempt, so retries are preserved rather than overwritten.
 4. **The history outlives pg-boss's cleanup.** When pg-boss deletes a job row, `pgbossier.record` is left untouched — the history stays.
@@ -102,12 +102,13 @@ await install(pool);
 const boss = new PgBoss(connectionString);
 await boss.start();
 
-// 3. Wrap it. `client.boss` is the same pg-boss instance; from here on, every
-//    job state transition is mirrored into `pgbossier.record` and kept forever.
+// 3. Wrap it. `client` is one surface — every pg-boss method plus pg-bossier's
+//    own; from here on, each job state transition is mirrored into
+//    `pgbossier.record` and kept forever.
 const client = bossier({ boss, pool });
 
-await client.boss.createQueue('email');
-await client.boss.send('email', { to: 'user@example.com' });
+await client.createQueue('email');
+await client.send('email', { to: 'user@example.com' });
 ```
 
 ### Reading job history
