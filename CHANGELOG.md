@@ -23,7 +23,7 @@ first `develop` → `main` squash._
 - `install(pool)` — creates the `pgbossier` schema, the `pgbossier.record` chronicle table (one row per `(job_id, attempt)`) and its indexes, the `pgbossier.capture()` function, and a capture trigger on `pgboss.job`; backfills jobs that predate installation. Idempotent.
 - `uninstall(pool)` — `DROP SCHEMA pgbossier CASCADE`; removes everything and cascades away the capture trigger, leaving `pgboss.job` untouched (symmetric drop-in).
 - Capture trigger mirrors every `pgboss.job` state transition (`created` / `active` / `retry` / `completed` / `cancelled` / `failed`) into `pgbossier.record`, preserving each attempt forever — surviving pg-boss's DELETE+INSERT retry path. Fail-open: a capture error is logged as a warning and never blocks the underlying pg-boss operation.
-- `bossier({ boss, pool })` client — one unified surface that wraps the pg-boss instance: every pg-boss method is forwarded to it, and pg-bossier's own methods sit alongside, including `recordPatch(jobId, attempt, patch)` for the pg-bossier-owned columns (`progress`, `terminal_detail`, `input_snapshot`).
+- `bossier({ boss, pool })` client — one unified surface that wraps the pg-boss instance: every pg-boss method is forwarded to it, and pg-bossier's own methods sit alongside, including `recordPatch(jobId, attempt, patch)` for the pg-bossier-owned columns `terminal_detail` and `input_snapshot`.
 - Public API from `src/index.ts`: `install`, `uninstall`, `bossier`, and the `Bossier` / `BossierMethods` / `BossierOptions` / `RecordPatch` types.
 - `pg ^8.0.0` declared as a peer dependency (consumers supply the `pg.Pool`).
 - Integration test suite — `vitest` with `@testcontainers/postgresql`, run against real Postgres + pg-boss 12.18.2 (no mocks).
@@ -41,7 +41,12 @@ first `develop` → `main` squash._
   - `listLongRunning(opts)` — active jobs whose `started_on` is older than a threshold (default 900s).
 - Exported read-API types `JobRecord`, `JobState`, `JobFilter`, and `ListJobsOpts`; `findById`, `getRetryHistory`, and `listJobs` are generic over `<TInput, TOutput>`.
 - `record_active_idx` — a partial index on `pgbossier.record (queue, started_on) WHERE state = 'active'` that serves `listLongRunning` without a sequential scan.
+- Goal 6 persistent job-progress API on the `bossier` client — `setProgress` and `getProgress`, reading and writing the `pgbossier.record.progress` column, which survives pg-boss's DELETE+INSERT retry path:
+  - `setProgress(jobId, progress)` — writes progress to the job's current attempt (resolved server-side as `max(attempt)`, so the worker needs only `job.id`). Accepts any JSON-serializable value; fail-open on runtime errors; throws only on a null/undefined/non-serializable argument.
+  - `getProgress(jobId)` — returns `{ progress, attempt }` for the most-recent non-null progress across attempts (the `attempt` distinguishes a current-attempt checkpoint from a carried-forward prior-attempt value), or `null` if unknown or never written.
+- Exported type `ProgressResult<TProgress>`; `getProgress` is generic over `<TProgress>`.
 
 ### Changed
 
 - The integration test harness constructs pg-boss with `supervise: false` and `schedule: false`, so its maintenance loop and cron scheduler no longer perturb `count(*)` assertions during tests.
+- `recordPatch` no longer writes the `progress` column — `setProgress` is its sole write path.
