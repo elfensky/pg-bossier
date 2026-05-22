@@ -1,10 +1,19 @@
 # pg-bossier Goal 6 — Persistent Progress API — Design
 
-- **Status:** Draft v2 — revised after a 4-way adversarial debate review
-- **Date:** 2026-05-21
+- **Status:** Draft v3 — reconciled with the unified-client architecture
+- **Date:** 2026-05-22
 - **Author:** elfensky, with claude-code
-- **Builds on:** `2026-05-20-storage-architecture-design.md`, `2026-05-21-goal-5-read-api-design.md`, and the shipped substrate
+- **Builds on:** `2026-05-22-unified-client-design.md`, `2026-05-20-storage-architecture-design.md`, `2026-05-21-goal-5-read-api-design.md`, and the shipped substrate
 - **Target:** sub-issue [#7](https://github.com/elfensky/pg-bossier/issues/7) — Goal 6, Persistent job progress
+
+## Revision note (v3 — 2026-05-22)
+
+`bossier({ boss, pool })` now returns a **unified client** — a `Proxy` over the pg-boss instance exposing pg-boss's whole API plus pg-bossier's own `BossierMethods` on one flat surface (`2026-05-22-unified-client-design.md`, merged in `9fe05fb`). There is no `.boss` sub-object and no `BossierClient` type. v3 reconciles this spec with that:
+
+- `setProgress` / `getProgress` become two more entries in the `BossierMethods` interface — flat on the unified client, called as `client.setProgress(...)` / `client.getProgress(...)`. §7 updated.
+- §9's API-shape analysis is rewritten. Option (a) — "overload a pg-boss method" — now concretely means *intercepting `touch` in the wrapping proxy*; it is no longer "structurally unavailable," just worse than (b). The decision (sibling method) is unchanged; the reasoning is corrected.
+
+No design decision changes — only the surface the methods attach to and the §9 rationale.
 
 ## Revision note (v2 — 2026-05-21)
 
@@ -42,7 +51,7 @@ The storage half of Goal 6 is **already shipped** — issue #7's storage-locatio
 
 Issue #7's "Decisions to make" framed the write API around overloading `boss.touch`. Inspection of pg-boss 12.18.2's published type surface reshaped that:
 
-1. **`boss.touch` cannot carry a payload.** pg-boss 12's signature is `touch(name, id, options?)` where `options` is `ConnectionOptions` (`{ db }`) only — there is no payload slot, and no other pg-boss public method has a worker-callable mid-flight data slot. Issue #1's API-shape option (a) — "overload a pg-boss method" — is therefore *structurally unavailable* for progress; it would have to become a wrapping client (option (c)). See §9.
+1. **`boss.touch` cannot carry a payload.** pg-boss 12's signature is `touch(name, id, options?)` where `options` is `ConnectionOptions` (`{ db }`) only — there is no payload slot, and no other pg-boss public method has a worker-callable mid-flight data slot. Issue #1's API-shape option (a) — "overload a pg-boss method" — therefore cannot be a simple parameter pass. With the unified client (itself a wrapping proxy) option (a) *is* mechanically reachable — by intercepting `touch` in the proxy — but at a real cost; §9 evaluates and rejects it.
 
 2. **A worker does not know its `attempt` by default.** The job object a `work()` handler receives is `Job<T>` — `{ id, name, data, expireInSeconds, heartbeatSeconds, signal, groupId?, groupTier? }`. It has **no `retryCount`**. `retryCount` lives on `JobWithMetadata<T>`, available only when the worker opts into `work(..., { includeMetadata: true })` (default `false`). A write API keyed on an explicit `attempt` argument would force every progress consumer to enable `includeMetadata`. The design resolves the attempt server-side instead, so the worker only ever needs `job.id`.
 
@@ -50,14 +59,14 @@ Issue #7's "Decisions to make" framed the write API around overloading `boss.tou
 
 | # | Decision | Choice |
 |---|---|---|
-| 1 | Write-API surface | Sibling method on the `bossier` client — `bossier.setProgress(...)`. Not a wrapping client. |
+| 1 | Write-API surface | A sibling method in `BossierMethods`, flat on the unified client — `client.setProgress(...)`. Not a `touch` interception. |
 | 2 | `setProgress` signature | `setProgress(jobId, progress)` — attempt resolved server-side as `max(attempt)`. |
 | 3 | `getProgress` retry-resume semantics | Most-recent non-null `progress` across all attempts, returned as `{ progress, attempt }`. |
 | 4 | Payload shape | Any JSON-serializable value; `setProgress` marshals internally. |
 | 5 | Error handling | Fail-open on runtime errors (log + swallow); throw only on argument validation. |
 | 6 | Retention | Keep forever — no clearing mechanism. |
 
-## 1. Write API — `bossier.setProgress(jobId, progress)`
+## 1. Write API — `setProgress(jobId, progress)`
 
 ```ts
 setProgress(jobId: string, progress: unknown): Promise<void>
@@ -83,7 +92,7 @@ WHERE job_id = $1
 
 This is **not** "transient, self-correcting." If the live worker writes again it overwrites the stale value — but if the live worker crashes before its next `setProgress`, the zombie's stale value *persists* as the most-recent non-null progress and can be **consumed as a resume checkpoint by the next retry**, causing redundant re-work. It never corrupts the trigger-owned chronicle columns (`state`, timing, `data`, `output`) — the damage is confined to the app-hook `progress` value. The `attempt` field that `getProgress` returns (§2) is the mitigation: a worker can see which attempt a value came from. Well-configured `expireInSeconds` plus heartbeats keep the window small. Explicit-attempt addressing would eliminate the failure mode entirely but would force `includeMetadata: true` on every consumer — the trade the design Q&A weighed and rejected (Decision 2).
 
-## 2. Read API — `bossier.getProgress(jobId)`
+## 2. Read API — `getProgress(jobId)`
 
 ```ts
 interface ProgressResult<TProgress = unknown> {
@@ -151,7 +160,7 @@ Issue #1's constraint: *"Audit writes are best-effort, never block pg-boss. Defa
 
 A new file **`src/progress.ts`**, holding `setProgress(pool, jobId, progress)` and `getProgress(pool, jobId)` as standalone pool-taking functions — mirroring how `src/read.ts` is structured.
 
-- `src/client.ts` wires both onto `BossierClient` (closing over the client's `pool`, exactly as the Goal 5 read methods are wired).
+- `src/client.ts` adds `setProgress` and `getProgress` to the `BossierMethods` interface and to the `methods` object inside `bossier()` (closing over the `pool`, exactly as the Goal 5 read methods are). The `Proxy` forwards them automatically — no other `client.ts` change. Neither name collides with a pg-boss method (pg-boss has no `setProgress` / `getProgress`), so the unified-client collision guard stays satisfied.
 - `src/index.ts` re-exports the new `ProgressResult` type alongside the existing exports.
 - **`recordPatch` is narrowed — `progress` is removed from it.** Today `RecordPatch` carries a `progress?` slot *and* `setProgress` writes the same column — two public writers with contradictory behavior (`recordPatch` no-ops on a `null` patch and rejects bare strings; `setProgress` throws on `null` and marshals bare strings). v2 removes `progress` from the `RecordPatch` interface and from `recordPatch`'s `UPDATE`, leaving `recordPatch` with only `terminal_detail` and `input_snapshot` (the Goal 2 / Goal 4 write paths). `setProgress` becomes the **sole** writer of `progress`. This is a small, safe change to not-yet-released substrate code (version is `0.0.0`).
 
@@ -168,12 +177,12 @@ Goal 6 introduces **no new pg-boss surface**:
 
 ## 9. API-shape principle — (a) overload vs (b) sibling method
 
-Issue #1's API-shape principle requires each write-feature sub-issue to prototype both an overload of a pg-boss method (a) and a new sibling method (b), then document the trade-off and pick one.
+Issue #1's API-shape principle requires each write-feature sub-issue to prototype both an overload of a pg-boss method (a) and a new sibling method (b), then document the trade-off and pick one. The unified client refines what (a) means: pg-bossier's client is already a `Proxy` over pg-boss, so "overload a pg-boss method" concretely means *intercepting that method in the proxy's `get` trap*.
 
-- **(a) Overload a pg-boss method.** The only worker-callable, mid-flight pg-boss method is `touch`. In pg-boss 12.18.2 `touch(name, id, options?)` takes `options: ConnectionOptions` only — there is no payload slot, and no other public pg-boss method exposes one mid-flight. "Overloading `touch` to accept progress" is therefore not possible by passing an option; it would require a **wrapping client** that intercepts `touch` calls (issue #1's option (c)) — putting pg-bossier in the queue-op call path and changing how consumers obtain their pg-boss instance.
-- **(b) Sibling method.** `bossier.setProgress` is a new method on pg-bossier's own client, built on the shipped `pgbossier.record` substrate. It composes cleanly, requires no change to how consumers use pg-boss, keeps pg-bossier out of the queue-op path, and is consistent with the Goal 5 read methods already on the same client.
+- **(a) Intercept `touch` in the proxy.** The only worker-callable, mid-flight pg-boss method is `touch` — `touch(name, id, options?)`, `options: ConnectionOptions`. The proxy could return a `touch` wrapper that accepts an extended options object, strips a `progress` field, calls the real `touch`, and writes progress. This is now *mechanically possible* — the proxy exists. Its costs are real: it must **override `touch`'s type** on the unified surface (the clean `PgBoss & BossierMethods` would become `Omit<PgBoss, 'touch'> & …`, since `touch`'s `options` has no `progress` field); it is a **deliberate shadow** of a pg-boss method, which the unified-client collision rule permits only as a documented override; and it **couples progress reporting to heartbeats** — a worker that wants one but not the other is forced to reason about both.
+- **(b) Sibling method.** `setProgress` is a new entry in `BossierMethods`, flat on the unified client beside `findById` / `listJobs` / the rest. It composes cleanly, needs no type surgery on any pg-boss method, shadows nothing, and keeps progress reporting independent of heartbeat. It is consistent with the eight methods already on the surface.
 
-**Decision: (b).** Option (a) is structurally unavailable for a mid-flight payload — `touch` carries no data — and the wrapping-client form of it is heavier on every axis. The trade-off is one-sided.
+**Decision: (b).** Option (a) is no longer *impossible* — the unified client made it reachable — but it is worse on every axis: it overrides a forwarded pg-boss method's type, shadows a pg-boss method, and conflates two distinct worker concerns. (b) is a clean, flat, decoupled addition. The trade-off is one-sided.
 
 ## 10. Edge-case matrix
 
@@ -210,7 +219,7 @@ Integration tests only — `vitest` + `@testcontainers/postgresql`, real Postgre
 ## Summary of the public surface added
 
 ```ts
-// on BossierClient
+// two new entries in BossierMethods — flat on the unified `Bossier` client
 setProgress(jobId: string, progress: unknown): Promise<void>;
 getProgress<TProgress = unknown>(jobId: string): Promise<ProgressResult<TProgress> | null>;
 
