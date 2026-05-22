@@ -18,8 +18,9 @@ pg-boss is pinned as a peer dependency at `^12.18.2`.
 
 ### Stable
 
-- **The `PgBoss` class.** `src/client.ts` imports it as a type only; pg-bossier's runtime makes no pg-boss method calls of its own.
-- **pg-boss's public queue API, as exercised by the integration suite:** `new PgBoss()`, `start`, `stop`, `createQueue`, `send`, `fetch`, `complete`, `fail`, `cancel`, `touch`. These are the methods consumers already call; pg-bossier composes with them and never overrides them.
+- **The `PgBoss` class.** `src/client.ts` imports it as a type only. `bossier()`'s public return type is `Bossier` = `PgBoss & BossierMethods`.
+- **The `PgBoss` instance, wrapped by the unified client.** `bossier()` returns a `Proxy` over the pg-boss instance the consumer constructs. The proxy forwards pg-boss's **entire public method surface** to that instance — each method bound to it, because pg-boss 12 defines methods that read `#private` fields and would throw if `this` were the proxy. pg-bossier initiates no pg-boss calls of its own; it forwards the consumer's. This relies on `PgBoss` being an ordinary class instance — public methods reachable via `Reflect.get` and bindable, `instanceof PgBoss` intact through the proxy. A pg-boss change to that shape is a major-version concern, hence Stable.
+- **pg-boss's public queue API and EventEmitter surface.** `new PgBoss()`, `start`, `stop`, `createQueue`, `send`, `fetch`, `complete`, `fail`, `cancel`, `touch`, and `on` / `once` / `off` are the methods consumers call and the integration suite exercises. pg-bossier composes with them and never overrides them — a CI test asserts pg-bossier's own method names never collide with `PgBoss.prototype`.
 
 ### Transitional
 
