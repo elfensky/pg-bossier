@@ -20,6 +20,11 @@ const UUID_RE =
  * and swallowed — a failed progress write must never fail the consumer's job.
  * The *only* throw path is argument validation (a programmer error): `progress`
  * must not be `null` / `undefined` and must be JSON-serializable.
+ *
+ * Note: non-finite numbers (`NaN`, `Infinity`) marshal to JSON `null` via
+ * `JSON.stringify` — a standard JS behavior, not a pg-bossier-specific one.
+ * They are stored as the JSON null literal, so `getProgress` will return
+ * `{ progress: null, attempt }` rather than the number the caller passed.
  */
 export async function setProgress(
   pool: Pool, jobId: string, progress: unknown,
