@@ -1,7 +1,7 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
-import { setProgress } from '../src/progress.js';
+import { setProgress, getProgress } from '../src/progress.js';
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -41,4 +41,28 @@ test('setProgress is a no-op (no throw) for an unknown or malformed job id', asy
   await expect(
     setProgress(h.pool, 'not-a-uuid', { x: 1 }),
   ).resolves.toBeUndefined();
+});
+
+test('getProgress returns the value and its source attempt', async () => {
+  const queue = 'progress-get';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {});
+  await setProgress(h.pool, jobId!, { pct: 40 });
+  const result = await getProgress(h.pool, jobId!);
+  // attempt: 0 — initial attempt of a freshly-sent job (no retries yet)
+  expect(result).toEqual({ progress: { pct: 40 }, attempt: 0 });
+});
+
+test('getProgress returns null for a job that never wrote progress', async () => {
+  const queue = 'progress-get-none';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {});
+  await expect(getProgress(h.pool, jobId!)).resolves.toBeNull();
+});
+
+test('getProgress returns null for unknown and malformed job ids', async () => {
+  await expect(
+    getProgress(h.pool, '00000000-0000-0000-0000-000000000000'),
+  ).resolves.toBeNull();
+  await expect(getProgress(h.pool, 'not-a-uuid')).resolves.toBeNull();
 });
