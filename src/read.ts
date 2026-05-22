@@ -14,6 +14,7 @@ interface RecordShared<TInput> {
   startedOn: Date | null;
   completedOn: Date | null;
   capturedAt: Date;
+  seq: bigint;
 }
 
 /** One attempt's row. Discriminated on `state` — `output` differs per state. */
@@ -53,6 +54,7 @@ interface RawRecordRow {
   started_on: Date | null;
   completed_on: Date | null;
   captured_at: Date;
+  seq: string;
 }
 
 const UUID_RE =
@@ -80,6 +82,7 @@ function mapRecord<TInput = unknown, TOutput = unknown>(
     startedOn: r.started_on,
     completedOn: r.completed_on,
     capturedAt: r.captured_at,
+    seq: BigInt(r.seq),
   } as JobRecord<TInput, TOutput>;
 }
 

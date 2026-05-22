@@ -41,6 +41,7 @@ export interface RecordRow {
   started_on: Date | null;
   completed_on: Date | null;
   captured_at: Date;
+  seq: string;
 }
 
 export async function getRecords(pool: pg.Pool, jobId: string): Promise<RecordRow[]> {
