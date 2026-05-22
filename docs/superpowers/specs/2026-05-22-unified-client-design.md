@@ -207,10 +207,14 @@ mocks, on the existing harness:
 ## Process note
 
 This is a foundational public-API decision. Issue #1's API-shape principle
-*names* the wrapping-client option as allowed, but no issue tracks the
-**decision to adopt it as the base client shape**. Per CLAUDE.md ("touches an
-undecided area → open an issue first"), a short issue should be opened to
-record this decision before implementation.
+*names* the wrapping-client option (c) as allowed, but no issue tracked the
+**decision to adopt it as the base client shape**. Rather than open a new
+issue, the decision is recorded on the existing issues: an
+implementation-progress note on #1, and implementation-update notes on the
+write-feature issues #3 / #5 / #7, whose (a)/(b) option framing the unified
+client refines — option (a), "overload a pg-boss method," now means
+intercepting that method in the wrapping proxy. See the implementation
+plan's Task 1.
 
 ## Next step
 
