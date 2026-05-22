@@ -2,6 +2,7 @@ import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
 import { setProgress, getProgress } from '../src/progress.js';
+import { getRetryHistory } from '../src/read.js';
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -65,4 +66,51 @@ test('getProgress returns null for unknown and malformed job ids', async () => {
     getProgress(h.pool, '00000000-0000-0000-0000-000000000000'),
   ).resolves.toBeNull();
   await expect(getProgress(h.pool, 'not-a-uuid')).resolves.toBeNull();
+});
+
+test('getProgress carries the prior attempt forward through a retry gap', async () => {
+  const queue = 'progress-retry';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 1 });
+
+  await h.boss.fetch(queue);                          // attempt 0 -> active
+  await setProgress(h.pool, jobId!, { processed: 200 });
+  await h.boss.fail(queue, jobId!, { err: 'boom' });  // attempt 0 -> retry
+  await h.boss.fetch(queue);                          // attempt 1 -> active
+
+  // attempt 1's row exists with progress still NULL
+  const rows = await getRecords(h.pool, jobId!);
+  expect(rows.map((r) => r.attempt)).toEqual([0, 1]);
+  expect(rows[1]!.progress).toBeNull();
+
+  // getProgress carries attempt 0's value forward; its attempt is the lower one
+  expect(await getProgress(h.pool, jobId!)).toEqual({
+    progress: { processed: 200 }, attempt: 0,
+  });
+
+  // once attempt 1 writes, getProgress flips to it
+  await setProgress(h.pool, jobId!, { processed: 480 });
+  expect(await getProgress(h.pool, jobId!)).toEqual({
+    progress: { processed: 480 }, attempt: 1,
+  });
+
+  await h.boss.complete(queue, jobId!, { ok: true });
+});
+
+test('per-attempt progress stays visible via getRetryHistory after terminal state', async () => {
+  const queue = 'progress-forensic';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 1 });
+
+  await h.boss.fetch(queue);
+  await setProgress(h.pool, jobId!, { attempt: 'zero' });
+  await h.boss.fail(queue, jobId!, { err: 'x' });
+  await h.boss.fetch(queue);
+  await setProgress(h.pool, jobId!, { attempt: 'one' });
+  await h.boss.complete(queue, jobId!, { ok: true });
+
+  const history = await getRetryHistory(h.pool, jobId!);
+  expect(history.map((r) => r.progress)).toEqual([
+    { attempt: 'zero' }, { attempt: 'one' },
+  ]);
 });
