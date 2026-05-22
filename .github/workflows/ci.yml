@@ -1,7 +1,8 @@
 # Lint, build, and run the integration suite on every push to develop or main
 # and every PR. The suite uses @testcontainers/postgresql; Docker is preinstalled
-# on the ubuntu-latest runner, so no `services:` Postgres block is needed. One
-# Node and one pg-boss version for now — the pg-boss matrix is tracked in #9.
+# on the ubuntu-latest runner, so no `services:` Postgres block is needed. A
+# separate tripwire job warns when pg-boss publishes a minor above the
+# peer-dep floor — see COMPATIBILITY.md "Version support" for the policy.
 name: CI
 
 on:
@@ -23,3 +24,27 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+
+  pg-boss-version-tripwire:
+    # Warns (does not fail) when the latest published pg-boss minor is above
+    # the peer-dep floor declared in package.json. The trigger to add a
+    # floor+latest matrix (and the correctness assertions that earn it) is
+    # this warning firing. See COMPATIBILITY.md "Version support".
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare pg-boss floor vs latest published minor
+        run: |
+          set -euo pipefail
+          FLOOR_RANGE=$(node -e "console.log(require('./package.json').peerDependencies['pg-boss'])")
+          FLOOR_MM=$(printf '%s' "$FLOOR_RANGE" | sed -E 's/[^0-9]*([0-9]+)\.([0-9]+).*/\1.\2/')
+          LATEST=$(npm view pg-boss version)
+          LATEST_MM=$(printf '%s' "$LATEST" | sed -E 's/^([0-9]+)\.([0-9]+).*/\1.\2/')
+          echo "Peer-dep range: $FLOOR_RANGE  (minor: $FLOOR_MM)"
+          echo "Latest published: $LATEST     (minor: $LATEST_MM)"
+          if [ "$FLOOR_MM" = "$LATEST_MM" ]; then
+            echo "Floor and latest minor match — no tripwire."
+          else
+            echo "::warning::pg-boss latest minor ($LATEST_MM, version $LATEST) is above the peer-dep floor minor ($FLOOR_MM, range $FLOOR_RANGE). See COMPATIBILITY.md section 'Version support — no matrix today, self-firing tripwire'."
+          fi
