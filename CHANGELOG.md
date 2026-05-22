@@ -48,5 +48,6 @@ first `develop` → `main` squash._
 
 ### Changed
 
+- `COMPATIBILITY.md` now documents the per-PR update cadence and the explicit decision against a CI version matrix and a time-bound support SLA. CI adds a tripwire step that warns when pg-boss publishes a minor above the peer-dep floor in `package.json`. Resolves issue [#9](https://github.com/elfensky/pg-bossier/issues/9). Cross-version correctness assertions on `pgbossier.record` continue as follow-up [#19](https://github.com/elfensky/pg-bossier/issues/19).
 - The integration test harness constructs pg-boss with `supervise: false` and `schedule: false`, so its maintenance loop and cron scheduler no longer perturb `count(*)` assertions during tests.
 - `recordPatch` no longer writes the `progress` column — `setProgress` is its sole write path.

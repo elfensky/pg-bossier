@@ -37,11 +37,49 @@ pg-boss 12 has **no `pgboss.archive` table**; finished job rows are deleted in p
 
 pg-bossier reaches into none of these.
 
-## Still open (issue [#9](https://github.com/elfensky/pg-bossier/issues/9))
+## How this doc gets updated
 
-This document classifies the surfaces. Two related decisions are tracked in #9 and are **not** settled here:
+This document is a ledger of real pg-boss surfaces pg-bossier currently
+uses — not a prediction of future ones. When a PR adds a new pg-boss
+method, column, or structural assumption, the same PR extends the table
+above with that surface and its tier. This norm is a code-review
+expectation, not enforced automation; it will sometimes be missed. The
+floor/latest tripwire below is the safety net for when it is.
 
-- **The CI version matrix** — which set of pg-boss versions CI runs the suite against (latest + N-1 + N-2 minors, or another window).
-- **Update cadence** — whether this document is revised on every PR that touches a pg-boss surface, or on a separate audit cadence.
+As later goals land they will add surfaces — `work` and the ORM
+transaction adapters to Stable, more `pgboss.job` columns to
+Transitional. Extend the tables above in the same change.
 
-As later goals land they will add surfaces — `work` and the ORM transaction adapters to Stable, more `pgboss.job` columns to Transitional. Extend the tables above in the same change.
+## Version support — no matrix today, self-firing tripwire
+
+pg-bossier's CI runs against a single pg-boss version: whatever `npm ci`
+resolves to inside the peer-dep range declared in `package.json`. Today
+the floor and the latest published pg-boss are the same version, so a
+matrix would be a degenerate one-entry list.
+
+What CI-against-latest catches: hard schema breaks — a column we read
+disappears, or changes type in a way the trigger cannot compile against
+— detectable by the existing integration suite. What it does NOT catch:
+silent semantic drift. A column kept as an alias on rename. A
+type/nullability shift the trigger still compiles against. pg-boss
+adding or reordering its own triggers on `pgboss.job`. Upgrade-path
+bugs that only manifest moving from an older minor to a newer one.
+Those classes of bug are caught by cross-version correctness assertions
+against `pgbossier.record`, not by matrix presence alone (see [follow-up
+issue #19](https://github.com/elfensky/pg-bossier/issues/19)).
+
+The tripwire: a CI step compares the latest published pg-boss version
+against the peer-dep floor declared in `package.json`. When they
+diverge, the step surfaces a warning that links back to this section.
+The trigger to add a floor+latest version matrix is **floor and latest
+diverging**, contingent on the correctness assertions above existing
+first. The matrix is the runtime; the assertions are the safety. A
+matrix without assertions broadens the set of versions we can silently
+be wrong on.
+
+No time-bound support SLA. The "~2 weeks" estimate in issue #1 was an
+internal complexity gate, not a commitment to consumers. "Supported"
+means "the existing CI passes against the version pg-boss publishes
+into the peer-dep range." When the floor and latest diverge,
+"supported" extends to include the correctness assertions naming what
+semantic behavior is verified across versions.
