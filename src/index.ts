@@ -3,4 +3,10 @@ export { bossier } from './client.js';
 export type { Bossier, BossierMethods, BossierOptions } from './client.js';
 export type { RecordPatch } from './record.js';
 export type { ProgressResult } from './progress.js';
-export type { JobRecord, JobState, JobFilter, ListJobsOpts } from './read.js';
+export type { JobRecord, JobState, JobFilter, ListJobsOpts, GetEventsSinceOpts } from './read.js';
+export { subscribe } from './events.js';
+export type {
+  BossierEvents, JobEvent, JobEventName,
+  BossierErrorEvent, BossierWarningEvent, ErrorReason,
+  SubscribeOptions,
+} from './events.js';
