@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { SchemaNames } from './sql.js';
 
 export type JobState =
   | 'created' | 'active' | 'retry' | 'completed' | 'cancelled' | 'failed';
@@ -89,11 +90,12 @@ function mapRecord<TInput = unknown, TOutput = unknown>(
 /** A job's latest attempt, across all queues. `null` if never captured. */
 export async function findById<TInput = unknown, TOutput = unknown>(
   pool: Pool,
+  schemas: SchemaNames,
   jobId: string,
 ): Promise<JobRecord<TInput, TOutput> | null> {
   if (!UUID_RE.test(jobId)) return null;
   const { rows } = await pool.query<RawRecordRow>(
-    `SELECT * FROM pgbossier.record
+    `SELECT * FROM ${schemas.pgbossier}.record
      WHERE job_id = $1
      ORDER BY attempt DESC
      LIMIT 1`,
@@ -105,11 +107,12 @@ export async function findById<TInput = unknown, TOutput = unknown>(
 /** Every attempt of a job, oldest first. `[]` if unknown. */
 export async function getRetryHistory<TInput = unknown, TOutput = unknown>(
   pool: Pool,
+  schemas: SchemaNames,
   jobId: string,
 ): Promise<JobRecord<TInput, TOutput>[]> {
   if (!UUID_RE.test(jobId)) return [];
   const { rows } = await pool.query<RawRecordRow>(
-    `SELECT * FROM pgbossier.record
+    `SELECT * FROM ${schemas.pgbossier}.record
      WHERE job_id = $1
      ORDER BY attempt ASC`,
     [jobId],
@@ -121,12 +124,14 @@ const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
 
 /** `WITH` body: the latest-attempt row of every job. */
-const RECORD_CURRENT = `
+function recordCurrent(schemas: SchemaNames): string {
+  return `
   current AS (
     SELECT DISTINCT ON (job_id) *
-    FROM pgbossier.record
+    FROM ${schemas.pgbossier}.record
     ORDER BY job_id, attempt DESC
   )`;
+}
 
 const ORDER_COLUMNS = {
   createdOn: 'created_on',
@@ -192,6 +197,7 @@ function buildWhere(filter: JobFilter): { clause: string; params: unknown[] } {
 /** The single most-recently-created job in each queue, at its current state. */
 export async function latestPerQueue(
   pool: Pool,
+  schemas: SchemaNames,
   queues: string[],
   opts: { states?: JobState[] } = {},
 ): Promise<JobRecord[]> {
@@ -203,7 +209,7 @@ export async function latestPerQueue(
     stateClause = `AND state = ANY($${params.length})`;
   }
   const { rows } = await pool.query<RawRecordRow>(
-    `WITH ${RECORD_CURRENT}
+    `WITH ${recordCurrent(schemas)}
      SELECT DISTINCT ON (queue) *
      FROM current
      WHERE queue = ANY($1) ${stateClause}
@@ -220,11 +226,12 @@ const ALL_STATES: readonly JobState[] = [
 /** Job counts by current state. Zero-fills all six states. */
 export async function countByState(
   pool: Pool,
+  schemas: SchemaNames,
   filter: JobFilter = {},
 ): Promise<Record<JobState, number>> {
   const { clause, params } = buildWhere(filter);
   const { rows } = await pool.query<{ state: JobState; count: number }>(
-    `WITH ${RECORD_CURRENT}
+    `WITH ${recordCurrent(schemas)}
      SELECT state, count(*)::int AS count
      FROM current
      ${clause}
@@ -241,11 +248,12 @@ export async function countByState(
 /** Job counts by queue. */
 export async function countByQueue(
   pool: Pool,
+  schemas: SchemaNames,
   filter: JobFilter = {},
 ): Promise<Record<string, number>> {
   const { clause, params } = buildWhere(filter);
   const { rows } = await pool.query<{ queue: string; count: number }>(
-    `WITH ${RECORD_CURRENT}
+    `WITH ${recordCurrent(schemas)}
      SELECT queue, count(*)::int AS count
      FROM current
      ${clause}
@@ -270,6 +278,7 @@ const DEFAULT_LONG_RUNNING_SECONDS = 900;
  */
 export async function listLongRunning(
   pool: Pool,
+  schemas: SchemaNames,
   opts: { queue?: string; longerThanSeconds?: number; limit?: number } = {},
 ): Promise<JobRecord[]> {
   const limit = resolveLimit(opts.limit);
@@ -286,7 +295,7 @@ export async function listLongRunning(
     queueClause = `AND queue = $${params.length}`;
   }
   const { rows } = await pool.query<RawRecordRow>(
-    `SELECT * FROM pgbossier.record
+    `SELECT * FROM ${schemas.pgbossier}.record
      WHERE state = 'active' ${queueClause}
        AND started_on < now() - make_interval(secs => $1)
      ORDER BY started_on ASC, job_id
@@ -313,6 +322,7 @@ export interface GetEventsSinceOpts {
  */
 export async function getEventsSince<TInput = unknown, TOutput = unknown>(
   pool: Pool,
+  schemas: SchemaNames,
   since: bigint,
   opts: GetEventsSinceOpts = {},
 ): Promise<JobRecord<TInput, TOutput>[]> {
@@ -321,7 +331,7 @@ export async function getEventsSince<TInput = unknown, TOutput = unknown>(
     `SELECT job_id, queue, attempt, state, data, output, progress,
             terminal_detail, input_snapshot,
             created_on, started_on, completed_on, captured_at, seq
-       FROM pgbossier.record
+       FROM ${schemas.pgbossier}.record
       WHERE seq > $1
       ORDER BY seq ASC
       LIMIT $2`,
@@ -333,6 +343,7 @@ export async function getEventsSince<TInput = unknown, TOutput = unknown>(
 /** Filtered, paginated job list over the current view, with an exact total. */
 export async function listJobs<TInput = unknown, TOutput = unknown>(
   pool: Pool,
+  schemas: SchemaNames,
   opts: ListJobsOpts = {},
 ): Promise<{ rows: JobRecord<TInput, TOutput>[]; total: number }> {
   const limit = resolveLimit(opts.limit);
@@ -342,7 +353,7 @@ export async function listJobs<TInput = unknown, TOutput = unknown>(
   const orderCol = ORDER_COLUMNS[opts.orderBy ?? 'createdOn'] ?? ORDER_COLUMNS.createdOn;
   const { clause, params } = buildWhere(opts);
   const { rows } = await pool.query<RawRecordRow & { total_count: string }>(
-    `WITH ${RECORD_CURRENT}
+    `WITH ${recordCurrent(schemas)}
      SELECT *, count(*) OVER () AS total_count
      FROM current
      ${clause}
@@ -355,7 +366,7 @@ export async function listJobs<TInput = unknown, TOutput = unknown>(
     // `count(*) OVER ()` only rides along on returned rows; an offset past
     // the end yields none, so count separately to keep `total` exact.
     const counted = await pool.query<{ count: number }>(
-      `WITH ${RECORD_CURRENT}
+      `WITH ${recordCurrent(schemas)}
        SELECT count(*)::int AS count
        FROM current
        ${clause}`,

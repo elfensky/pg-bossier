@@ -9,10 +9,15 @@ import {
   type GetEventsSinceOpts,
 } from './read.js';
 import { subscribe, type BossierEvents, type SubscribeOptions } from './events.js';
+import { resolveSchemas, type SchemaNames } from './sql.js';
 
 export interface BossierOptions {
   boss: PgBoss;
   pool: Pool;
+  /** Where pg-bossier's own objects live. Default: 'pgbossier'. */
+  schema?: string;
+  /** Where pg-boss installed itself. Default: 'pgboss'. */
+  pgbossSchema?: string;
 }
 
 /**
@@ -82,26 +87,30 @@ export type Bossier = PgBoss & BossierMethods;
  */
 export function bossier(options: BossierOptions): Bossier {
   const { boss, pool } = options;
+  const s: SchemaNames = resolveSchemas({
+    pgbossier: options.schema,
+    pgboss:    options.pgbossSchema,
+  });
 
   const methods: BossierMethods = {
-    recordPatch: (jobId, attempt, patch) => recordPatch(pool, jobId, attempt, patch),
+    recordPatch: (jobId, attempt, patch) => recordPatch(pool, s, jobId, attempt, patch),
     findById: <TInput = unknown, TOutput = unknown>(jobId: string) =>
-      findById<TInput, TOutput>(pool, jobId),
+      findById<TInput, TOutput>(pool, s, jobId),
     getRetryHistory: <TInput = unknown, TOutput = unknown>(jobId: string) =>
-      getRetryHistory<TInput, TOutput>(pool, jobId),
+      getRetryHistory<TInput, TOutput>(pool, s, jobId),
     listJobs: <TInput = unknown, TOutput = unknown>(opts?: ListJobsOpts) =>
-      listJobs<TInput, TOutput>(pool, opts),
-    latestPerQueue: (queues, opts) => latestPerQueue(pool, queues, opts),
-    countByState: (filter) => countByState(pool, filter),
-    countByQueue: (filter) => countByQueue(pool, filter),
-    listLongRunning: (opts) => listLongRunning(pool, opts),
-    setProgress: (jobId, progress) => setProgress(pool, jobId, progress),
+      listJobs<TInput, TOutput>(pool, s, opts),
+    latestPerQueue: (queues, opts) => latestPerQueue(pool, s, queues, opts),
+    countByState: (filter) => countByState(pool, s, filter),
+    countByQueue: (filter) => countByQueue(pool, s, filter),
+    listLongRunning: (opts) => listLongRunning(pool, s, opts),
+    setProgress: (jobId, progress) => setProgress(pool, s, jobId, progress),
     getProgress: <TProgress = unknown>(jobId: string) =>
-      getProgress<TProgress>(pool, jobId),
-    subscribe: (opts) => subscribe(pool, opts),
+      getProgress<TProgress>(pool, s, jobId),
+    subscribe: (opts) => subscribe(pool, s, opts),
     getEventsSince: <TInput = unknown, TOutput = unknown>(
       since: bigint, opts?: GetEventsSinceOpts,
-    ) => getEventsSince<TInput, TOutput>(pool, since, opts),
+    ) => getEventsSince<TInput, TOutput>(pool, s, since, opts),
   };
   const methodNames = new Set(Object.keys(methods));
 
