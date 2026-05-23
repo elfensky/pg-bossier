@@ -1,3 +1,79 @@
+export interface SchemaNames {
+  /** Where pg-bossier's own objects live. Default: 'pgbossier'. */
+  pgbossier: string;
+  /** Where pg-boss installed itself. Default: 'pgboss'. */
+  pgboss: string;
+}
+
+const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
+
+const RESERVED_SCHEMA_NAMES = new Set([
+  'public',
+  'information_schema',
+]);
+
+const RESERVED_KEYWORDS = new Set([
+  'all', 'analyse', 'analyze', 'and', 'any', 'array', 'as', 'asc',
+  'asymmetric', 'authorization', 'binary', 'both', 'case', 'cast',
+  'check', 'collate', 'collation', 'column', 'concurrently', 'constraint',
+  'create', 'cross', 'current_catalog', 'current_date', 'current_role',
+  'current_schema', 'current_time', 'current_timestamp', 'current_user',
+  'default', 'deferrable', 'desc', 'distinct', 'do', 'else', 'end',
+  'except', 'false', 'fetch', 'for', 'foreign', 'freeze', 'from', 'full',
+  'grant', 'group', 'having', 'ilike', 'in', 'initially', 'inner',
+  'intersect', 'into', 'is', 'isnull', 'join', 'lateral', 'leading',
+  'left', 'like', 'limit', 'localtime', 'localtimestamp', 'natural',
+  'not', 'notnull', 'null', 'offset', 'on', 'only', 'or', 'order',
+  'outer', 'overlaps', 'placing', 'primary', 'references', 'returning',
+  'right', 'select', 'session_user', 'similar', 'some', 'symmetric',
+  'system_user', 'table', 'tablesample', 'then', 'to', 'trailing',
+  'true', 'union', 'unique', 'user', 'using', 'variadic', 'verbose',
+  'when', 'where', 'window', 'with',
+]);
+
+export function assertSchemaName(name: string, key: keyof SchemaNames): void {
+  if (!IDENT_RE.test(name)) {
+    throw new Error(
+      `pgbossier: invalid ${key} schema name: ${JSON.stringify(name)}. ` +
+      `Must match ${IDENT_RE.source}.`,
+    );
+  }
+  if (name.startsWith('pg_')) {
+    throw new Error(
+      `pgbossier: schema name ${JSON.stringify(name)} is reserved — ` +
+      `Postgres reserves the 'pg_' prefix for system schemas.`,
+    );
+  }
+  if (RESERVED_SCHEMA_NAMES.has(name)) {
+    throw new Error(
+      `pgbossier: schema name ${JSON.stringify(name)} is reserved — ` +
+      `using it would conflict with user data or system catalogs.`,
+    );
+  }
+  if (RESERVED_KEYWORDS.has(name)) {
+    throw new Error(
+      `pgbossier: schema name ${JSON.stringify(name)} is a Postgres ` +
+      `reserved keyword and cannot be used as a bare identifier.`,
+    );
+  }
+  if (Buffer.byteLength(name, 'utf8') > 63) {
+    throw new Error(
+      `pgbossier: schema name ${JSON.stringify(name)} exceeds 63 bytes ` +
+      `(NAMEDATALEN). Postgres would silently truncate it.`,
+    );
+  }
+}
+
+export function resolveSchemas(opts?: Partial<SchemaNames>): SchemaNames {
+  const s: SchemaNames = {
+    pgbossier: opts?.pgbossier ?? 'pgbossier',
+    pgboss:    opts?.pgboss    ?? 'pgboss',
+  };
+  assertSchemaName(s.pgbossier, 'pgbossier');
+  assertSchemaName(s.pgboss, 'pgboss');
+  return s;
+}
+
 export const SCHEMA_SQL = `CREATE SCHEMA IF NOT EXISTS pgbossier;`;
 
 export const SEQUENCE_SQL = `CREATE SEQUENCE IF NOT EXISTS pgbossier.record_seq;`;
