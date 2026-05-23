@@ -12,7 +12,7 @@ first `develop` → `main` squash._
 
 ### Added
 
-- First-measurement performance bench at `test/perf-chronicle-scale.test.ts`, runnable via `npm run test:perf`. Populates 1,000 jobs through pg-boss's full happy-path lifecycle and samples each of the seven Goal 5 read methods 100 times. Methodology, first-measurement numbers, and published per-method budgets recorded in `PERFORMANCE.md` at the repo root. Resolves issue [#12](https://github.com/elfensky/pg-bossier/issues/12); scale extensions, direct DB-side trigger-overhead measurement, CI integration, and budget violation policy continue as follow-up [#21](https://github.com/elfensky/pg-bossier/issues/21).
+- First-measurement performance bench at `test/perf/chronicle-scale.test.ts`, runnable via `npm run test:perf` (uses a dedicated `vitest.perf.config.ts`; the default `npm test` excludes `test/perf/**`). Populates 1,000 jobs through pg-boss's full happy-path lifecycle and samples each of the seven Goal 5 read methods 100 times. Methodology, first-measurement numbers, and published per-method budgets recorded in `PERFORMANCE.md` at the repo root. Resolves issue [#12](https://github.com/elfensky/pg-bossier/issues/12); scale extensions, direct DB-side trigger-overhead measurement, CI integration, and budget violation policy continue as follow-up [#21](https://github.com/elfensky/pg-bossier/issues/21).
 - Initial project scaffolding: `package.json`, `CLAUDE.md`, `.gitignore`, `CHANGELOG.md`.
 - `pg-boss ^12.18.2` declared as a peer dependency.
 - TypeScript with `strict` mode and `noUncheckedIndexedAccess`, ESM output via `"type": "module"` and `NodeNext` resolution, `.d.ts` declarations emitted alongside `.js`.

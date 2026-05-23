@@ -4,7 +4,7 @@ This file is the published record of pg-bossier's query performance against the 
 
 ## What this measures
 
-The bench (`test/perf-chronicle-scale.test.ts`) runs in a single process against a real Postgres instance (via testcontainers). It begins with a warmup phase: 100 jobs are sent, fetched, and completed through pg-boss's normal lifecycle, then discarded — these do not appear in the measurements. After warmup, pg-bossier is installed and 1,000 jobs are populated through the pg-boss happy-path lifecycle (send → fetch → complete), which fires three trigger captures per job into the chronicle table. Each of the ten Goal 5 read methods is then sampled 100 times using `performance.now()`. The bench reports mean, median, and p99 per method in a markdown table written to stdout.
+The bench (`test/perf/chronicle-scale.test.ts`) runs in a single process against a real Postgres instance (via testcontainers). It begins with a warmup phase: 100 jobs are sent, fetched, and completed through pg-boss's normal lifecycle, then discarded — these do not appear in the measurements. After warmup, pg-bossier is installed and 1,000 jobs are populated through the pg-boss happy-path lifecycle (send → fetch → complete), which fires three trigger captures per job into the chronicle table. Each of the ten Goal 5 read methods is then sampled 100 times using `performance.now()`. The bench reports mean, median, and p99 per method in a markdown table written to stdout.
 
 ## What this does NOT measure
 
@@ -61,7 +61,7 @@ npm run test:perf
 The default vitest reporter suppresses `console.log` output from passing tests, which means the markdown table will not appear in the terminal. To see it, invoke vitest directly with the verbose reporter:
 
 ```sh
-npx vitest run test/perf-chronicle-scale.test.ts --reporter=verbose
+npx vitest run test/perf/chronicle-scale.test.ts --reporter=verbose
 ```
 
 ## How to interpret
@@ -74,7 +74,7 @@ Three runs were taken for the first measurement (runs 7, 8, and 9 of the bench).
 
 ## Future scenarios (follow-up #21)
 
-- 10k / 100k / 1M-job scale extensions (likely separate `test/perf-chronicle-NNk.test.ts` files).
+- 10k / 100k / 1M-job scale extensions (likely separate `test/perf/chronicle-NNk.test.ts` files).
 - **Direct DB-side trigger-overhead measurement** (e.g. `pg_stat_statements` / per-call `EXPLAIN ANALYZE` — the populate-time-delta approach failed at N=1000 because warmup noise dominates; this is the right path forward for measuring per-trigger cost).
 - Failure-injection variants so `getRetryHistory` exercises real retry chains.
 - Multi-queue cardinality populates.

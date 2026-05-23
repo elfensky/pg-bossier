@@ -1,8 +1,8 @@
 import { describe, beforeAll, afterAll, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { startHarness, type Harness } from './harness.js';
-import { install } from '../src/install.js';
-import { bossier } from '../src/client.js';
+import { startHarness, type Harness } from '../harness.js';
+import { install } from '../../src/install.js';
+import { bossier } from '../../src/client.js';
 
 /**
  * Perf bench — chronicle read methods at 1k populated jobs.
