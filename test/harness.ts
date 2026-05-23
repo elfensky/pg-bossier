@@ -15,7 +15,7 @@ export interface Harness {
 }
 
 export async function startHarness(): Promise<Harness> {
-  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:16').start();
+  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:18').start();
   const connectionString = container.getConnectionUri();
   // supervise/schedule off: otherwise pg-boss's maintenance and cron loops insert
   // jobs mid-test, the capture trigger mirrors them, and count(*) assertions flake.
