@@ -1,0 +1,62 @@
+# perf-pr — issue #23.
+# Runs the vitest perf bench on every pull request, fetches the latest
+# develop baseline from the `perf-metrics` branch, and writes a Markdown
+# diff to $GITHUB_STEP_SUMMARY. If any method regresses past the
+# threshold (>2x mean or >5x p99), the job exits nonzero so the
+# `perf-regression` status check shows a red X — by design, this check
+# should NOT be marked required in branch protection (issue #23 chose
+# visibility-without-blocking as the v1 enforcement model).
+#
+# Permissions: read-only. No push to perf-metrics, no PR comments.
+# Surfacing is via GITHUB_STEP_SUMMARY only.
+name: perf-pr
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  perf-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Run perf bench (writes perf-output.json)
+        run: npm run test:perf
+
+      - name: Fetch develop baseline from perf-metrics branch
+        run: |
+          set -euo pipefail
+          if git fetch origin perf-metrics --depth=1 2>/dev/null; then
+            # Extract the baseline JSONL from the orphan branch without
+            # checking it out (would clobber the PR's tree).
+            if git show origin/perf-metrics:perf-metrics.jsonl > perf-metrics.jsonl 2>/dev/null; then
+              echo "Baseline fetched ($(wc -l < perf-metrics.jsonl) records)."
+            else
+              echo "perf-metrics branch exists but has no perf-metrics.jsonl yet."
+              : > perf-metrics.jsonl
+            fi
+          else
+            echo "perf-metrics branch does not exist yet — first-PR-ever path."
+            : > perf-metrics.jsonl
+          fi
+
+      - name: Compare PR run vs develop baseline
+        env:
+          PB_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          export PR_NUMBER="$PB_PR_NUMBER"
+          node scripts/perf-compare.mjs perf-output.json perf-metrics.jsonl
