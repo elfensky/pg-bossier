@@ -231,3 +231,17 @@ test('close() during backoff wait cancels reconnect', async () => {
   await new Promise((r) => setTimeout(r, 2000));
   expect(secondConnected).toBe(false);
 }, 10_000);
+
+test('AbortSignal.abort() closes the subscriber', async () => {
+  const ac = new AbortController();
+  const events = await subscribe(h.pool, { signal: ac.signal });
+  ac.abort();
+  await new Promise((r) => setTimeout(r, 50));
+  expect(h.pool.idleCount).toBe(h.pool.totalCount);
+});
+
+test('subscribe() with already-aborted signal throws AbortError', async () => {
+  const ac = new AbortController();
+  ac.abort();
+  await expect(subscribe(h.pool, { signal: ac.signal })).rejects.toThrow(/abort/i);
+});
