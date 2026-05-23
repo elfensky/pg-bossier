@@ -32,7 +32,8 @@
         "prepare": "npm run build",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
-        "test": "vitest run"
+        "test": "vitest run",
+        "test:perf": "vitest run --config vitest.perf.config.ts"
     },
     "peerDependencies": {
         "pg-boss": "^12.18.2",
