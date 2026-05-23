@@ -59,8 +59,10 @@ class BenchHarness {
       name,
       samples,
       mean: sum / samples.length,
-      median: sorted[Math.floor(sorted.length * 0.5)]!,
-      p99: sorted[Math.floor(sorted.length * 0.99)]!,
+      // Percentile of rank p over n samples: sorted[floor((n - 1) * p)].
+      // For n=100, p99 is sorted[98] (second-highest), not sorted[99] (max).
+      median: sorted[Math.floor((sorted.length - 1) * 0.5)]!,
+      p99: sorted[Math.floor((sorted.length - 1) * 0.99)]!,
     };
     this.measurements.push(measurement);
   }
@@ -134,20 +136,32 @@ describe('Perf — chronicle scale (1k jobs)', () => {
     await h1.teardown();
 
     // -------- Phase 2: populate with pg-bossier installed --------
+    // Wrap setup in try/catch so an install or populate failure does not leak
+    // the testcontainer — afterAll only runs if beforeAll completes.
     phase2 = await startHarness();
-    await install(phase2.pool);
-    const t0p2 = performance.now();
-    const jobIds = await populateLifecycle(phase2.boss, N_JOBS);
-    const tWithTrigger = performance.now() - t0p2;
+    try {
+      await install(phase2.pool);
+      const t0p2 = performance.now();
+      const jobIds = await populateLifecycle(phase2.boss, N_JOBS);
+      const tWithTrigger = performance.now() - t0p2;
 
-    bench.recordTriggerOverhead({
-      tBaseline,
-      tWithTrigger,
-      stateTransitions: N_JOBS * 3,
-    });
+      bench.recordTriggerOverhead({
+        tBaseline,
+        tWithTrigger,
+        stateTransitions: N_JOBS * 3,
+      });
 
-    // Pick the median-position job id for known-id lookups.
-    knownJobId = jobIds[Math.floor(jobIds.length / 2)]!;
+      if (jobIds.length === 0) {
+        throw new Error('populateLifecycle returned no job ids — bench cannot sample known-id methods');
+      }
+      // Pick the median-position job id for known-id lookups.
+      knownJobId = jobIds[Math.floor(jobIds.length / 2)]!;
+    } catch (err) {
+      // Tear down the leaked container, then rethrow so the test fails loudly.
+      await phase2.teardown();
+      phase2 = null;
+      throw err;
+    }
 
     // -------- Phase 3: query measurements against the populated chronicle --------
     const client = bossier({ boss: phase2.boss, pool: phase2.pool });
@@ -169,7 +183,7 @@ describe('Perf — chronicle scale (1k jobs)', () => {
     if (phase2) await phase2.teardown();
   });
 
-  it('captured 1 trigger-overhead measurement + 10 query measurements', () => {
+  it('captured 10 query measurements (trigger overhead is a separate scalar)', () => {
     expect(bench.allMeasurements().length).toBe(10);
   });
 
