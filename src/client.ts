@@ -4,9 +4,11 @@ import { recordPatch, type RecordPatch } from './record.js';
 import { setProgress, getProgress, type ProgressResult } from './progress.js';
 import {
   findById, getRetryHistory, listJobs, latestPerQueue,
-  countByState, countByQueue, listLongRunning,
+  countByState, countByQueue, listLongRunning, getEventsSince,
   type JobRecord, type JobState, type JobFilter, type ListJobsOpts,
+  type GetEventsSinceOpts,
 } from './read.js';
+import { subscribe, type BossierEvents, type SubscribeOptions } from './events.js';
 
 export interface BossierOptions {
   boss: PgBoss;
@@ -53,6 +55,12 @@ export interface BossierMethods {
   getProgress: <TProgress = unknown>(
     jobId: string,
   ) => Promise<ProgressResult<TProgress> | null>;
+  /** Open a subscription to job-lifecycle events. */
+  subscribe: (opts?: SubscribeOptions) => Promise<BossierEvents>;
+  /** Read pgbossier.record rows with seq > since, ordered ascending. */
+  getEventsSince: <TInput = unknown, TOutput = unknown>(
+    since: bigint, opts?: GetEventsSinceOpts,
+  ) => Promise<JobRecord<TInput, TOutput>[]>;
 }
 
 /**
@@ -90,6 +98,10 @@ export function bossier(options: BossierOptions): Bossier {
     setProgress: (jobId, progress) => setProgress(pool, jobId, progress),
     getProgress: <TProgress = unknown>(jobId: string) =>
       getProgress<TProgress>(pool, jobId),
+    subscribe: (opts) => subscribe(pool, opts),
+    getEventsSince: <TInput = unknown, TOutput = unknown>(
+      since: bigint, opts?: GetEventsSinceOpts,
+    ) => getEventsSince<TInput, TOutput>(pool, since, opts),
   };
   const methodNames = new Set(Object.keys(methods));
 

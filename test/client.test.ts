@@ -125,3 +125,33 @@ test('the client exposes setProgress and getProgress bound to its pool', async (
     progress: { via: 'client' }, attempt: 0,
   });
 });
+
+test('bossier.subscribe() returns events that fire on transitions', async () => {
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  const events = await client.subscribe();
+  const seen: string[] = [];
+  events.on('job', (e) => seen.push(e.event));
+
+  const queue = 'cli-subscribe';
+  await h.boss.createQueue(queue);
+  await h.boss.send(queue, {});
+  await new Promise((r) => setTimeout(r, 150));
+
+  expect(seen).toContain('created');
+  await events.close();
+});
+
+test('bossier.getEventsSince() returns rows after the cursor', async () => {
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  const queue = 'cli-cursor';
+  await h.boss.createQueue(queue);
+
+  const { rows: r0 } = await h.pool.query<{ s: string }>(
+    `SELECT COALESCE(max(seq), 0)::text AS s FROM pgbossier.record`,
+  );
+  const cursor = BigInt(r0[0]!.s);
+
+  const jobId = await h.boss.send(queue, {});
+  const evts = await client.getEventsSince(cursor);
+  expect(evts.some((e) => e.jobId === jobId)).toBe(true);
+});

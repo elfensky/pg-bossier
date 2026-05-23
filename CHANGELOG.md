@@ -46,6 +46,10 @@ first `develop` → `main` squash._
   - `setProgress(jobId, progress)` — writes progress to the job's current attempt (resolved server-side as `max(attempt)`, so the worker needs only `job.id`). Accepts any JSON-serializable value; fail-open on runtime errors; throws only on a null/undefined/non-serializable argument.
   - `getProgress(jobId)` — returns `{ progress, attempt }` for the most-recent non-null progress across attempts (the `attempt` distinguishes a current-attempt checkpoint from a carried-forward prior-attempt value), or `null` if unknown or never written.
 - Exported type `ProgressResult<TProgress>`; `getProgress` is generic over `<TProgress>`.
+- **Goal 7 — Lifecycle event API** (#8). `subscribe()` returns a typed `BossierEvents` (Node `EventEmitter`) that fires `'created'`, `'started'`, `'completed'`, `'failed'`, `'cancelled'`, `'retried'`, plus a `'job'` catch-all, `'connected'`, `'warning'`, and a discriminated `'error'` (`reason: 'gap' | 'parse' | 'handler'`). Transport: Postgres `LISTEN/NOTIFY` on `pgbossier_job` from the existing capture trigger. Auto-reconnect with exponential backoff + jitter. `AbortSignal` and `Symbol.asyncDispose` support.
+- **`seq BIGINT` monotonic event cursor** on `pgbossier.record` (sequence `pgbossier.record_seq`, advanced on every INSERT/UPDATE). Included in the NOTIFY payload.
+- **`getEventsSince(seq, opts?)`** on the `bossier` client — catch-up read for use after a gap signal. Returns the latest state per attempt (the audit table upserts each `(job_id, attempt)`).
+- `COMPATIBILITY.md`: new "Unsupported topologies" section (PgBouncer transaction-mode, standby connections, `target_session_attrs=read-write`).
 
 ### Changed
 

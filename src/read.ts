@@ -14,6 +14,7 @@ interface RecordShared<TInput> {
   startedOn: Date | null;
   completedOn: Date | null;
   capturedAt: Date;
+  seq: bigint;
 }
 
 /** One attempt's row. Discriminated on `state` — `output` differs per state. */
@@ -53,6 +54,7 @@ interface RawRecordRow {
   started_on: Date | null;
   completed_on: Date | null;
   captured_at: Date;
+  seq: string;
 }
 
 const UUID_RE =
@@ -80,6 +82,7 @@ function mapRecord<TInput = unknown, TOutput = unknown>(
     startedOn: r.started_on,
     completedOn: r.completed_on,
     capturedAt: r.captured_at,
+    seq: BigInt(r.seq),
   } as JobRecord<TInput, TOutput>;
 }
 
@@ -291,6 +294,40 @@ export async function listLongRunning(
     [...params, limit],
   );
   return rows.map((r) => mapRecord(r));
+}
+
+export interface GetEventsSinceOpts {
+  /** Cap the returned slice. Default: 1000. */
+  limit?: number;
+}
+
+/**
+ * Read rows from `pgbossier.record` whose `seq` is strictly greater than
+ * `since`, ordered ascending by `seq`. Pairs with the `seq` value carried
+ * in lifecycle event payloads.
+ *
+ * IMPORTANT: the audit table is a current-state table (one row per
+ * `(job_id, attempt)`, upserted in place). So this returns the **latest
+ * state** of every attempt whose row was touched after the cursor —
+ * NOT the full transition sequence within an attempt.
+ */
+export async function getEventsSince<TInput = unknown, TOutput = unknown>(
+  pool: Pool,
+  since: bigint,
+  opts: GetEventsSinceOpts = {},
+): Promise<JobRecord<TInput, TOutput>[]> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 1000, 10_000));
+  const { rows } = await pool.query<RawRecordRow>(
+    `SELECT job_id, queue, attempt, state, data, output, progress,
+            terminal_detail, input_snapshot,
+            created_on, started_on, completed_on, captured_at, seq
+       FROM pgbossier.record
+      WHERE seq > $1
+      ORDER BY seq ASC
+      LIMIT $2`,
+    [since.toString(), limit],
+  );
+  return rows.map(mapRecord<TInput, TOutput>);
 }
 
 /** Filtered, paginated job list over the current view, with an exact total. */

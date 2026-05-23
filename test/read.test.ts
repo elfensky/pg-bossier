@@ -1,7 +1,7 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
-import { startHarness, type Harness } from './harness.js';
+import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
-import { findById, getRetryHistory, listJobs, latestPerQueue, countByState, countByQueue, listLongRunning } from '../src/read.js';
+import { findById, getRetryHistory, listJobs, latestPerQueue, countByState, countByQueue, listLongRunning, getEventsSince } from '../src/read.js';
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -310,4 +310,63 @@ test('listLongRunning query is served by record_active_idx, not a seq scan', asy
     await client.query('ROLLBACK').catch(() => undefined);
     client.release();
   }
+});
+
+test('getEventsSince returns rows with seq strictly greater than cursor', async () => {
+  const queue = 'cursor-basic';
+  await h.boss.createQueue(queue);
+
+  const id1 = await h.boss.send(queue, { n: 1 });
+  await h.boss.fetch(queue);
+  await h.boss.complete(queue, id1!, { ok: 1 });
+
+  const rows0 = await getRecords(h.pool, id1!);
+  const cursor = BigInt(rows0[0]!.seq);
+
+  const id2 = await h.boss.send(queue, { n: 2 });
+  await h.boss.fetch(queue);
+
+  const events = await getEventsSince(h.pool, cursor);
+  const ids = events.map((e) => e.jobId);
+  expect(ids).toContain(id2!);
+  expect(ids).not.toContain(id1!);
+
+  for (let i = 1; i < events.length; i++) {
+    expect(events[i]!.seq > events[i - 1]!.seq).toBe(true);
+  }
+});
+
+test('getEventsSince(0n) returns every row', async () => {
+  const queue = 'cursor-all';
+  await h.boss.createQueue(queue);
+  await h.boss.send(queue, {});
+  const all = await getEventsSince(h.pool, 0n);
+  expect(all.length).toBeGreaterThan(0);
+});
+
+test('getEventsSince respects the limit option', async () => {
+  const queue = 'cursor-limit';
+  await h.boss.createQueue(queue);
+  for (let i = 0; i < 5; i++) await h.boss.send(queue, { i });
+  const events = await getEventsSince(h.pool, 0n, { limit: 3 });
+  expect(events.length).toBe(3);
+});
+
+test('getEventsSince returns final-state-per-attempt only', async () => {
+  const queue = 'cursor-final-state';
+  await h.boss.createQueue(queue);
+  const { rows } = await h.pool.query<{ s: string }>(
+    `SELECT COALESCE(max(seq), 0)::text AS s FROM pgbossier.record`,
+  );
+  const cursor = BigInt(rows[0]!.s);
+
+  const jobId = await h.boss.send(queue, {});
+  await h.boss.fetch(queue);
+  await h.boss.complete(queue, jobId!, { ok: true });
+
+  const events = await getEventsSince(h.pool, cursor);
+  const forJob = events.filter((e) => e.jobId === jobId);
+  // One row per (job_id, attempt) — final state only.
+  expect(forJob.length).toBe(1);
+  expect(forJob[0]!.state).toBe('completed');
 });
