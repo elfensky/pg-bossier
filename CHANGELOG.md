@@ -52,9 +52,34 @@ first `develop` → `main` squash._
 - **`seq BIGINT` monotonic event cursor** on `pgbossier.record` (sequence `pgbossier.record_seq`, advanced on every INSERT/UPDATE). Included in the NOTIFY payload.
 - **`getEventsSince(seq, opts?)`** on the `bossier` client — catch-up read for use after a gap signal. Returns the latest state per attempt (the audit table upserts each `(job_id, attempt)`).
 - `COMPATIBILITY.md`: new "Unsupported topologies" section (PgBouncer transaction-mode, standby connections, `target_session_attrs=read-write`).
+- **Goal 9 — Install / distribution shape** (#10). Schema names
+  (`pgbossier`, `pgboss`) become configurable via
+  `install(pool, { schema?, pgbossSchema? })`. Trigger name and NOTIFY
+  channel scoped to the schema (`${schema}_capture`, `${schema}_job`)
+  to support multiple pg-bossier installs per database. Hardened
+  validation: rejects `public`, `information_schema`, `pg_*`-prefixed
+  names, reserved keywords, and identifiers over 63 bytes. `install()`
+  wraps DDL in a transaction with a preflight `SELECT 1 FROM
+  pgboss.job LIMIT 0` check — failure leaves no partial state.
+- **CLI** (`npx pg-bossier install`, `uninstall`). Stdlib `parseArgs`
+  with `strict: true`. Prints destination (`host=… database=… schema=…`)
+  before any SQL runs. Exit codes: 0 success, 1 usage error, 2 runtime
+  error, 64 invalid schema name.
+- **package.json**: `bin: { pgbossier: ./bin/pgbossier.js }`, `engines`
+  bumped to `>=18.3.0`, `files: ["dist", "bin"]`.
+- **`CONTRIBUTING.md`**: first-publish runbook (develop → main mechanics,
+  `npm publish --dry-run`, version-bump policy).
+- **CI**: new `consumer-artifact-smoke-test` job that `npm pack`s and
+  installs the tarball in a fresh directory — verifies the bin script
+  and bundled `dist/` work end-to-end.
 
 ### Changed
 
 - `COMPATIBILITY.md` now documents the per-PR update cadence and the explicit decision against a CI version matrix and a time-bound support SLA. CI adds a tripwire step that warns when pg-boss publishes a minor above the peer-dep floor in `package.json`. Resolves issue [#9](https://github.com/elfensky/pg-bossier/issues/9). Cross-version correctness assertions on `pgbossier.record` continue as follow-up [#19](https://github.com/elfensky/pg-bossier/issues/19).
 - The integration test harness constructs pg-boss with `supervise: false` and `schedule: false`, so its maintenance loop and cron scheduler no longer perturb `count(*)` assertions during tests.
 - `recordPatch` no longer writes the `progress` column — `setProgress` is its sole write path.
+- **Internal signatures**: free functions in `src/read.ts`,
+  `src/progress.ts`, `src/events.ts`, `src/record.ts` now take a
+  `SchemaNames` parameter as the second argument (after `pool`). Public
+  API via `bossier({ boss, pool })` unchanged — schemas resolve at
+  construction time and close over each method.

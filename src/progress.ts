@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { SchemaNames } from './sql.js';
 
 /** A job's effective progress: the most-recent non-null value and its source attempt. */
 export interface ProgressResult<TProgress = unknown> {
@@ -27,7 +28,7 @@ const UUID_RE =
  * `{ progress: null, attempt }` rather than the number the caller passed.
  */
 export async function setProgress(
-  pool: Pool, jobId: string, progress: unknown,
+  pool: Pool, schemas: SchemaNames, jobId: string, progress: unknown,
 ): Promise<void> {
   if (progress === undefined || progress === null) {
     throw new Error('setProgress: progress must not be null or undefined');
@@ -46,11 +47,11 @@ export async function setProgress(
   }
   try {
     const { rowCount } = await pool.query(
-      `UPDATE pgbossier.record
+      `UPDATE ${schemas.pgbossier}.record
          SET progress = $2::jsonb
        WHERE job_id = $1
          AND attempt = (
-           SELECT max(attempt) FROM pgbossier.record WHERE job_id = $1
+           SELECT max(attempt) FROM ${schemas.pgbossier}.record WHERE job_id = $1
          )`,
       [jobId, json],
     );
@@ -72,11 +73,11 @@ export async function setProgress(
  * (non-UUID) `jobId` short-circuits to `null` without a query.
  */
 export async function getProgress<TProgress = unknown>(
-  pool: Pool, jobId: string,
+  pool: Pool, schemas: SchemaNames, jobId: string,
 ): Promise<ProgressResult<TProgress> | null> {
   if (!UUID_RE.test(jobId)) return null;
   const { rows } = await pool.query<{ progress: unknown; attempt: number }>(
-    `SELECT progress, attempt FROM pgbossier.record
+    `SELECT progress, attempt FROM ${schemas.pgbossier}.record
      WHERE job_id = $1 AND progress IS NOT NULL
      ORDER BY attempt DESC
      LIMIT 1`,

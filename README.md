@@ -73,15 +73,92 @@ The capture is fail-open: if it ever errors, the failure is logged and skipped �
 
 ## Install
 
-> **Not yet published to npm.** Until the first release, install from GitHub:
+pg-bossier is a Postgres add-on to [pg-boss](https://github.com/timgit/pg-boss).
+Install it via npm and run the install step once against your database.
 
-```sh
-npm install github:elfensky/pg-bossier
+### From a git URL (pre-publish)
+
+Until v0.1.0 is on npm, install pg-bossier directly from a tagged commit:
+
+```bash
+npm install git+https://github.com/elfensky/pg-bossier#<commit-sha>
 ```
 
-pg-bossier compiles itself on install (an npm `prepare` hook), so a git install arrives with a ready-to-use `dist/`. Once published, this becomes `npm install pg-bossier`.
+Always pin to a specific commit SHA rather than a branch — branch refs
+in `package-lock.json` re-resolve to the branch head on every `npm ci`,
+which makes builds non-reproducible.
 
-`pg-boss` and `pg` are peer dependencies — install them alongside if your project doesn't already depend on them.
+### Programmatic install
+
+```ts
+import { Pool } from 'pg';
+import { install } from 'pg-bossier';
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+await install(pool);  // creates the pgbossier schema, table, trigger, etc.
+
+// Later:
+import { uninstall } from 'pg-bossier';
+await uninstall(pool);  // DROP SCHEMA pgbossier CASCADE
+```
+
+`install()` is idempotent. Run it once at app boot or in a one-shot
+migration script.
+
+### CLI install (optional)
+
+For ops contexts or CI/CD pipelines where wiring a Node script is
+awkward:
+
+```bash
+npx pg-bossier install   --conn-string="$DATABASE_URL"
+npx pg-bossier uninstall --conn-string="$DATABASE_URL"
+```
+
+The CLI prints the destination (`host=… database=… schema=…`) before
+running any SQL so you can confirm the right database is being changed.
+
+### Schema configuration
+
+By default, pg-bossier installs into the `pgbossier` schema and triggers
+on `pgboss.job`. Override either name:
+
+```ts
+await install(pool, {
+  schema:       'altbossier',     // pg-bossier's own schema
+  pgbossSchema: 'altpgboss',      // pg-boss source schema
+});
+```
+
+The same options propagate to the client:
+
+```ts
+const client = bossier({ boss, pool, schema: 'altbossier' });
+```
+
+### Prisma coexistence ⚠️
+
+> **⚠️ If you use Prisma with `multiSchema` preview, you MUST exclude
+> the `pgbossier` schema from your `datasource.schemas` list.**
+>
+> `prisma db pull` with `multiSchema` introspects all schemas including
+> pgbossier. Running `prisma migrate dev` against the resulting schema
+> would try to drop or migrate pg-bossier's tables — destructive
+> failure.
+
+For standard (non-`multiSchema`) Prisma usage: `prisma migrate` only
+manages schemas declared in your Prisma datasource. pgbossier is not
+declared there, so Prisma doesn't see it. `install(pool)` is
+idempotent; safe to run on every deploy.
+
+### Supported topologies
+
+| pg-bossier schemas | pg-boss schemas | Status |
+|---|---|---|
+| 1 | 1 (default) | ✅ Supported (common case) |
+| N distinct | N distinct | ✅ Supported (full isolation) |
+| 2 distinct | 1 shared | ❌ Unsupported (duplicate captures) |
+| 1 | N distinct | ❌ Unsupported (one instance, one source) |
 
 ## Usage
 

@@ -22,11 +22,23 @@
         }
     },
     "files": [
-        "dist"
+        "dist",
+        "bin"
     ],
-    "engines": {
-        "node": ">=18"
+    "bin": {
+        "pgbossier": "./bin/pgbossier.js"
     },
+    "engines": {
+        "node": ">=18.3.0"
+    },
+    "keywords": [
+        "pg-boss",
+        "postgres",
+        "job-queue",
+        "audit",
+        "events",
+        "lifecycle"
+    ],
     "scripts": {
         "build": "tsc",
         "prepare": "npm run build",

@@ -2,6 +2,9 @@ import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
 import { findById, getRetryHistory, listJobs, latestPerQueue, countByState, countByQueue, listLongRunning, getEventsSince } from '../src/read.js';
+import { resolveSchemas } from '../src/sql.js';
+
+const SCHEMAS = resolveSchemas();
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -12,7 +15,7 @@ test('findById returns the latest attempt of a job', async () => {
   await h.boss.createQueue(queue);
   const jobId = await h.boss.send(queue, { n: 1 });
 
-  const job = await findById(h.pool, jobId!);
+  const job = await findById(h.pool, SCHEMAS, jobId!);
   expect(job).not.toBeNull();
   expect(job!.jobId).toBe(jobId);
   expect(job!.queue).toBe(queue);
@@ -22,12 +25,12 @@ test('findById returns the latest attempt of a job', async () => {
 });
 
 test('findById returns null for an unknown job id', async () => {
-  const job = await findById(h.pool, '00000000-0000-0000-0000-000000000000');
+  const job = await findById(h.pool, SCHEMAS, '00000000-0000-0000-0000-000000000000');
   expect(job).toBeNull();
 });
 
 test('findById returns null for a malformed job id (no Postgres error)', async () => {
-  const job = await findById(h.pool, 'not-a-uuid');
+  const job = await findById(h.pool, SCHEMAS, 'not-a-uuid');
   expect(job).toBeNull();
 });
 
@@ -40,7 +43,7 @@ test('findById returns the current attempt of a retried job, not attempt 0', asy
   await h.boss.fetch(queue);
   await h.boss.complete(queue, jobId!, { ok: true });    // attempt 1 -> completed
 
-  const job = await findById(h.pool, jobId!);
+  const job = await findById(h.pool, SCHEMAS, jobId!);
   expect(job!.attempt).toBe(1);
   expect(job!.state).toBe('completed');
 });
@@ -57,13 +60,13 @@ test('getRetryHistory returns every attempt of a job, oldest first', async () =>
   await h.boss.fetch(queue);
   await h.boss.complete(queue, jobId!, { ok: true });
 
-  const history = await getRetryHistory(h.pool, jobId!);
+  const history = await getRetryHistory(h.pool, SCHEMAS, jobId!);
   expect(history.map((r) => r.attempt)).toEqual([0, 1, 2]);
   expect(history[2]!.state).toBe('completed');
 });
 
 test('getRetryHistory returns an empty array for an unknown job id', async () => {
-  const history = await getRetryHistory(h.pool, '00000000-0000-0000-0000-000000000000');
+  const history = await getRetryHistory(h.pool, SCHEMAS, '00000000-0000-0000-0000-000000000000');
   expect(history).toEqual([]);
 });
 
@@ -72,7 +75,7 @@ test('listJobs filters by queue and reports an accurate total', async () => {
   await h.boss.createQueue(queue);
   for (let i = 0; i < 5; i++) await h.boss.send(queue, { i });
 
-  const result = await listJobs(h.pool, { queue });
+  const result = await listJobs(h.pool, SCHEMAS, { queue });
   expect(result.total).toBe(5);
   expect(result.rows).toHaveLength(5);
   expect(result.rows.every((r) => r.queue === queue)).toBe(true);
@@ -83,8 +86,8 @@ test('listJobs paginates without overlap and total is independent of limit', asy
   await h.boss.createQueue(queue);
   for (let i = 0; i < 6; i++) await h.boss.send(queue, { i });
 
-  const page1 = await listJobs(h.pool, { queue, limit: 2, offset: 0 });
-  const page2 = await listJobs(h.pool, { queue, limit: 2, offset: 2 });
+  const page1 = await listJobs(h.pool, SCHEMAS, { queue, limit: 2, offset: 0 });
+  const page2 = await listJobs(h.pool, SCHEMAS, { queue, limit: 2, offset: 2 });
   expect(page1.total).toBe(6);
   expect(page2.total).toBe(6);
   const ids1 = page1.rows.map((r) => r.jobId);
@@ -103,13 +106,13 @@ test('listJobs filters by state and counts a retried job once', async () => {
   await h.boss.fetch(queue);
   await h.boss.complete(queue, jobId!, { ok: true });
 
-  const result = await listJobs(h.pool, { queue, states: ['completed'] });
+  const result = await listJobs(h.pool, SCHEMAS, { queue, states: ['completed'] });
   expect(result.total).toBe(1);
   expect(result.rows[0]!.jobId).toBe(jobId);
 });
 
 test('listJobs returns an empty result for a queue with no jobs', async () => {
-  const result = await listJobs(h.pool, { queue: 'read-list-empty' });
+  const result = await listJobs(h.pool, SCHEMAS, { queue: 'read-list-empty' });
   expect(result).toEqual({ rows: [], total: 0 });
 });
 
@@ -120,14 +123,14 @@ test('listJobs filters by a creation-time window', async () => {
 
   const hourAgo = new Date(Date.now() - 3_600_000);
   const hourAhead = new Date(Date.now() + 3_600_000);
-  const recent = await listJobs(h.pool, { queue, createdAfter: hourAgo });
+  const recent = await listJobs(h.pool, SCHEMAS, { queue, createdAfter: hourAgo });
   expect(recent.total).toBe(3);
-  const future = await listJobs(h.pool, { queue, createdAfter: hourAhead });
+  const future = await listJobs(h.pool, SCHEMAS, { queue, createdAfter: hourAhead });
   expect(future.total).toBe(0);
 });
 
 test('listJobs rejects a non-positive limit', async () => {
-  await expect(listJobs(h.pool, { limit: 0 })).rejects.toThrow();
+  await expect(listJobs(h.pool, SCHEMAS, { limit: 0 })).rejects.toThrow();
 });
 
 test('latestPerQueue returns the most recent job per queue', async () => {
@@ -139,14 +142,14 @@ test('latestPerQueue returns the most recent job per queue', async () => {
   const lastA = await h.boss.send(qa, { last: true });
   const lastB = await h.boss.send(qb, { only: true });
 
-  const rows = await latestPerQueue(h.pool, [qa, qb]);
+  const rows = await latestPerQueue(h.pool, SCHEMAS, [qa, qb]);
   const byQueue = new Map(rows.map((r) => [r.queue, r]));
   expect(byQueue.get(qa)!.jobId).toBe(lastA);
   expect(byQueue.get(qb)!.jobId).toBe(lastB);
 });
 
 test('latestPerQueue returns an empty array for an empty queue list', async () => {
-  const rows = await latestPerQueue(h.pool, []);
+  const rows = await latestPerQueue(h.pool, SCHEMAS, []);
   expect(rows).toEqual([]);
 });
 
@@ -169,7 +172,7 @@ test('countByState counts each job once by its current state, all six keys prese
   // 1 created (sent last so fetch+complete above can't race with it)
   await h.boss.send(queue, {});
 
-  const counts = await countByState(h.pool, { queue });
+  const counts = await countByState(h.pool, SCHEMAS, { queue });
   expect(counts).toEqual({
     created: 1, active: 0, retry: 0, completed: 3, cancelled: 0, failed: 0,
   });
@@ -192,7 +195,7 @@ test('countByQueue counts jobs per queue, with a state filter', async () => {
   await h.boss.fetch(qb);
   await h.boss.fail(qb, id!, { err: 'x' });
 
-  const counts = await countByQueue(h.pool, {
+  const counts = await countByQueue(h.pool, SCHEMAS, {
     queues: [qa, qb],
     states: ['failed'],
   });
@@ -205,7 +208,7 @@ test('listLongRunning returns active jobs older than the threshold', async () =>
   const jobId = await h.boss.send(queue, {});
   await h.boss.fetch(queue); // -> active
 
-  const running = await listLongRunning(h.pool, { queue, longerThanSeconds: 0 });
+  const running = await listLongRunning(h.pool, SCHEMAS, { queue, longerThanSeconds: 0 });
   expect(running.map((r) => r.jobId)).toContain(jobId);
   expect(running.every((r) => r.state === 'active')).toBe(true);
 });
@@ -216,7 +219,7 @@ test('listLongRunning excludes a freshly-started job under a large threshold', a
   await h.boss.send(queue, {});
   await h.boss.fetch(queue); // -> active, started just now
 
-  const running = await listLongRunning(h.pool, { queue, longerThanSeconds: 3600 });
+  const running = await listLongRunning(h.pool, SCHEMAS, { queue, longerThanSeconds: 3600 });
   expect(running).toHaveLength(0);
 });
 
@@ -227,14 +230,14 @@ test('listJobs reports the real total even when the page is past the end', async
 
   // a page whose offset skips every match: rows are empty, but the total
   // must still be the true count — not 0.
-  const past = await listJobs(h.pool, { queue, limit: 10, offset: 100 });
+  const past = await listJobs(h.pool, SCHEMAS, { queue, limit: 10, offset: 100 });
   expect(past.rows).toHaveLength(0);
   expect(past.total).toBe(3);
 });
 
 test('listJobs throws when both queue and queues are supplied', async () => {
   await expect(
-    listJobs(h.pool, { queue: 'read-list-both', queues: ['read-list-both'] }),
+    listJobs(h.pool, SCHEMAS, { queue: 'read-list-both', queues: ['read-list-both'] }),
   ).rejects.toThrow(/queue/);
 });
 
@@ -244,7 +247,7 @@ test('listJobs falls back to a safe ordering for an unknown orderBy value', asyn
   await h.boss.send(queue, {});
 
   // a JS caller bypassing the orderBy type must not yield `ORDER BY undefined`.
-  const result = await listJobs(h.pool, { queue, orderBy: 'bogus' as never });
+  const result = await listJobs(h.pool, SCHEMAS, { queue, orderBy: 'bogus' as never });
   expect(result.total).toBe(1);
 });
 
@@ -265,7 +268,7 @@ test('latestPerQueue ignores a null created_on when picking the most recent job'
     ],
   );
 
-  const rows = await latestPerQueue(h.pool, [queue]);
+  const rows = await latestPerQueue(h.pool, SCHEMAS, [queue]);
   expect(rows).toHaveLength(1);
   expect(rows[0]!.jobId).toBe('11111111-1111-1111-1111-111111111111');
 });
@@ -283,7 +286,7 @@ test('listLongRunning returns only the current attempt of a retried job, no phan
   await h.boss.fail(queue, jobId!, { err: 'x' });  // attempt 0 -> retry
   await h.boss.fetch(queue);                       // attempt 1 -> active
 
-  const running = await listLongRunning(h.pool, { queue, longerThanSeconds: 0 });
+  const running = await listLongRunning(h.pool, SCHEMAS, { queue, longerThanSeconds: 0 });
   const forJob = running.filter((r) => r.jobId === jobId);
   expect(forJob).toHaveLength(1);
   expect(forJob[0]!.attempt).toBe(1);
@@ -326,7 +329,7 @@ test('getEventsSince returns rows with seq strictly greater than cursor', async 
   const id2 = await h.boss.send(queue, { n: 2 });
   await h.boss.fetch(queue);
 
-  const events = await getEventsSince(h.pool, cursor);
+  const events = await getEventsSince(h.pool, SCHEMAS, cursor);
   const ids = events.map((e) => e.jobId);
   expect(ids).toContain(id2!);
   expect(ids).not.toContain(id1!);
@@ -340,7 +343,7 @@ test('getEventsSince(0n) returns every row', async () => {
   const queue = 'cursor-all';
   await h.boss.createQueue(queue);
   await h.boss.send(queue, {});
-  const all = await getEventsSince(h.pool, 0n);
+  const all = await getEventsSince(h.pool, SCHEMAS, 0n);
   expect(all.length).toBeGreaterThan(0);
 });
 
@@ -348,7 +351,7 @@ test('getEventsSince respects the limit option', async () => {
   const queue = 'cursor-limit';
   await h.boss.createQueue(queue);
   for (let i = 0; i < 5; i++) await h.boss.send(queue, { i });
-  const events = await getEventsSince(h.pool, 0n, { limit: 3 });
+  const events = await getEventsSince(h.pool, SCHEMAS, 0n, { limit: 3 });
   expect(events.length).toBe(3);
 });
 
@@ -364,7 +367,7 @@ test('getEventsSince returns final-state-per-attempt only', async () => {
   await h.boss.fetch(queue);
   await h.boss.complete(queue, jobId!, { ok: true });
 
-  const events = await getEventsSince(h.pool, cursor);
+  const events = await getEventsSince(h.pool, SCHEMAS, cursor);
   const forJob = events.filter((e) => e.jobId === jobId);
   // One row per (job_id, attempt) — final state only.
   expect(forJob.length).toBe(1);

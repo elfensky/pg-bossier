@@ -2,10 +2,13 @@ import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 import { install } from '../src/install.js';
 import { subscribe } from '../src/events.js';
+import { resolveSchemas } from '../src/sql.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import pg from 'pg';
+
+const SCHEMAS = resolveSchemas();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -14,7 +17,7 @@ beforeAll(async () => { h = await startHarness(); await install(h.pool); });
 afterAll(async () => { await h.teardown(); });
 
 test('subscribe() returns events that emit "connected" on LISTEN', async () => {
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   // Most implementations emit 'connected' before subscribe() resolves.
   // Either we caught it already or it'll fire on a future tick.
   const connected = new Promise<void>((resolve) => events.once('connected', resolve));
@@ -26,14 +29,14 @@ test('subscribe() returns events that emit "connected" on LISTEN', async () => {
 });
 
 test('close() releases the connection back to the pool', async () => {
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   await events.close();
   // After close, idle count should equal total (connection released).
   expect(h.pool.idleCount).toBe(h.pool.totalCount);
 });
 
 test('close() is idempotent', async () => {
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   await events.close();
   await events.close();
 });
@@ -41,7 +44,7 @@ test('close() is idempotent', async () => {
 test('five event types fire for a job that fails-with-retry-then-succeeds', async () => {
   const queue = 'evt-six';
   await h.boss.createQueue(queue);
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   const seen: { event: string; attempt: number }[] = [];
   for (const name of ['created', 'started', 'completed', 'failed', 'cancelled', 'retried'] as const) {
     events.on(name, (e) => seen.push({ event: name, attempt: e.attempt }));
@@ -71,7 +74,7 @@ test('five event types fire for a job that fails-with-retry-then-succeeds', asyn
 test("catch-all 'job' listener receives every transition", async () => {
   const queue = 'evt-catchall';
   await h.boss.createQueue(queue);
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   const all: string[] = [];
   events.on('job', (e) => all.push(e.event));
 
@@ -87,7 +90,7 @@ test("catch-all 'job' listener receives every transition", async () => {
 test("per-type event fires before 'job' for the same transition", async () => {
   const queue = 'evt-order';
   await h.boss.createQueue(queue);
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   const order: string[] = [];
   events.on('completed', () => order.push('completed-listener'));
   events.on('job', (e) => order.push(`job-listener(${e.event})`));
@@ -106,7 +109,7 @@ test("per-type event fires before 'job' for the same transition", async () => {
 test('seq on emitted events is monotonically increasing', async () => {
   const queue = 'evt-seq';
   await h.boss.createQueue(queue);
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   const seqs: bigint[] = [];
   events.on('job', (e) => seqs.push(e.seq));
 
@@ -125,7 +128,7 @@ test('seq on emitted events is monotonically increasing', async () => {
 });
 
 test("unknown state passes through with event = state and fires 'warning' once", async () => {
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   const jobEvents: { event: string; state: string }[] = [];
   const warnings: { unknownState: string; jobId: string }[] = [];
   events.on('job', (e) => jobEvents.push({ event: e.event, state: e.state }));
@@ -152,7 +155,7 @@ test("unknown state passes through with event = state and fires 'warning' once",
 });
 
 test("thrown handler routes to 'error' (reason='handler'); stream continues", async () => {
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   const errors: { reason: string; error: unknown }[] = [];
   const after: string[] = [];
   events.on('error', (ev) => errors.push({ reason: ev.reason, error: ev.error }));
@@ -172,7 +175,7 @@ test("thrown handler routes to 'error' (reason='handler'); stream continues", as
 });
 
 test("malformed JSON fires 'error' (reason='parse'); stream continues", async () => {
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   const errors: { reason: string }[] = [];
   let jobEventsAfter = 0;
   events.on('error', (ev) => errors.push({ reason: ev.reason }));
@@ -191,7 +194,7 @@ test("malformed JSON fires 'error' (reason='parse'); stream continues", async ()
 });
 
 test("reconnect after pg_terminate_backend; 'error' (gap) then 'connected'", async () => {
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   const log: string[] = [];
   events.on('connected', () => log.push('connected'));
   events.on('error', (ev) => log.push(`error:${ev.reason}`));
@@ -221,7 +224,7 @@ test("reconnect after pg_terminate_backend; 'error' (gap) then 'connected'", asy
 }, 10_000);
 
 test('close() during backoff wait cancels reconnect', async () => {
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
 
   const { rows } = await h.pool.query<{ pid: number }>(
     `SELECT pid FROM pg_stat_activity WHERE state = 'idle' AND query ILIKE '%LISTEN%pgbossier_job%'`,
@@ -240,7 +243,7 @@ test('close() during backoff wait cancels reconnect', async () => {
 
 test('AbortSignal.abort() closes the subscriber', async () => {
   const ac = new AbortController();
-  const events = await subscribe(h.pool, { signal: ac.signal });
+  const events = await subscribe(h.pool, SCHEMAS, { signal: ac.signal });
   ac.abort();
   await new Promise((r) => setTimeout(r, 50));
   expect(h.pool.idleCount).toBe(h.pool.totalCount);
@@ -249,12 +252,12 @@ test('AbortSignal.abort() closes the subscriber', async () => {
 test('subscribe() with already-aborted signal throws AbortError', async () => {
   const ac = new AbortController();
   ac.abort();
-  await expect(subscribe(h.pool, { signal: ac.signal })).rejects.toThrow(/abort/i);
+  await expect(subscribe(h.pool, SCHEMAS, { signal: ac.signal })).rejects.toThrow(/abort/i);
 });
 
 test('two subscribers on the same pool both receive every event', async () => {
-  const a = await subscribe(h.pool);
-  const b = await subscribe(h.pool);
+  const a = await subscribe(h.pool, SCHEMAS);
+  const b = await subscribe(h.pool, SCHEMAS);
   const aSeen: string[] = [], bSeen: string[] = [];
   a.on('job', (e) => aSeen.push(e.jobId));
   b.on('job', (e) => bSeen.push(e.jobId));
@@ -278,7 +281,7 @@ test('install() backfill does NOT fire events for historical pgboss.job rows', a
 
     await install(h2.pool);
 
-    const events = await subscribe(h2.pool);
+    const events = await subscribe(h2.pool, SCHEMAS);
     const seen: string[] = [];
     events.on('job', (e) => seen.push(e.event));
     await new Promise((r) => setTimeout(r, 300));
@@ -300,7 +303,7 @@ test('reconnect handles idle_session_timeout disconnect', async () => {
     void client.query(`SET idle_session_timeout = '2s'`);
   });
 
-  const events = await subscribe(timeoutPool);
+  const events = await subscribe(timeoutPool, SCHEMAS);
   const log: string[] = [];
   events.on('connected', () => log.push('connected'));
   events.on('error', (ev) => log.push(`error:${ev.reason}`));
@@ -316,7 +319,7 @@ test('reconnect handles idle_session_timeout disconnect', async () => {
 }, 15_000);
 
 test('subscriber receives every event during a burst (notification flood)', async () => {
-  const events = await subscribe(h.pool);
+  const events = await subscribe(h.pool, SCHEMAS);
   let received = 0;
   events.on('created', () => { received += 1; });
 

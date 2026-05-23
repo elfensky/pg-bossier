@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { SchemaNames } from './sql.js';
 
 /** The pg-bossier-owned columns the app-hook may write via `recordPatch`. */
 export interface RecordPatch {
@@ -18,10 +19,10 @@ export interface RecordPatch {
  * sole write path — `recordPatch` deliberately does not touch it.
  */
 export async function recordPatch(
-  pool: Pool, jobId: string, attempt: number, patch: RecordPatch,
+  pool: Pool, schemas: SchemaNames, jobId: string, attempt: number, patch: RecordPatch,
 ): Promise<void> {
   await pool.query(
-    `UPDATE pgbossier.record SET
+    `UPDATE ${schemas.pgbossier}.record SET
        terminal_detail = COALESCE($3, terminal_detail),
        input_snapshot  = COALESCE($4, input_snapshot)
      WHERE job_id = $1 AND attempt = $2`,
