@@ -5,6 +5,7 @@ import { subscribe } from '../src/events.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import pg from 'pg';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -289,6 +290,30 @@ test('install() backfill does NOT fire events for historical pgboss.job rows', a
     await events.close();
   } finally { await h2.teardown(); }
 });
+
+test('reconnect handles idle_session_timeout disconnect', async () => {
+  // Build a pool that sets idle_session_timeout on each new connection.
+  // ALTER DATABASE does not apply to LISTEN connections in PG 16; SET at session
+  // level (via pool connect event) does.
+  const timeoutPool = new pg.Pool({ connectionString: h.pool.options.connectionString as string });
+  timeoutPool.on('connect', (client) => {
+    void client.query(`SET idle_session_timeout = '2s'`);
+  });
+
+  const events = await subscribe(timeoutPool);
+  const log: string[] = [];
+  events.on('connected', () => log.push('connected'));
+  events.on('error', (ev) => log.push(`error:${ev.reason}`));
+
+  // Wait long enough for idle_session_timeout to fire (~2s) and reconnect to complete (~3s).
+  await new Promise((r) => setTimeout(r, 5000));
+
+  expect(log.filter((s) => s === 'connected').length).toBeGreaterThanOrEqual(2);
+  expect(log).toContain('error:gap');
+
+  await events.close();
+  await timeoutPool.end();
+}, 15_000);
 
 test('src/events.ts imports only from pg and node built-ins', () => {
   const source = readFileSync(resolve(__dirname, '../src/events.ts'), 'utf8');
