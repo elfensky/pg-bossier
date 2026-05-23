@@ -5,16 +5,23 @@ import { install } from '../src/install.js';
 import { bossier } from '../src/client.js';
 
 /**
- * Perf bench — chronicle scale (1k jobs).
+ * Perf bench — chronicle read methods at 1k populated jobs.
  *
- * Two cold testcontainers in sequence:
- *   Phase 1 — baseline populate, no pg-bossier installed.
- *   Phase 2 — populate with pg-bossier installed. Container stays alive.
+ * Single warm testcontainer:
+ *   Phase 0 — warmup populate (100 jobs, discarded) to JIT pg-boss's hot
+ *             paths and warm Postgres's plan cache before timed work.
+ *   Phase 1 — install pg-bossier, populate 1k jobs through full pg-boss
+ *             lifecycle (send → fetch → complete). Builds the chronicle.
+ *   Phase 2 — sample each of the seven Goal 5 read methods 100 times,
+ *             record mean + p99.
  *
- * Phase 3 (query measurement) runs against phase 2's container.
- *
- * The per-state-transition overhead = (T_phase2 - T_phase1) / 3000.
- * 3000 reflects 3 trigger fires per happy-path job (created → active → completed).
+ * Trigger-overhead measurement (a two-populate baseline-vs-installed
+ * comparison) was attempted at N=1000 and found unreliable: JIT and OS
+ * cache noise at this scale is the same order of magnitude as the
+ * trigger's per-state-change cost, so the populate-time delta produced
+ * inconsistent (sometimes negative) numbers. Trigger overhead measurement
+ * is carried as follow-up #21 — likely via direct DB-side timing rather
+ * than a populate-delta. This bench publishes ONLY read-method latencies.
  *
  * Run via: npm run test:perf
  * Spec: docs/superpowers/specs/2026-05-23-performance-budget-design.md
@@ -22,6 +29,7 @@ import { bossier } from '../src/client.js';
 
 const QUEUE = 'perf-queue';
 const N_JOBS = 1000;
+const N_WARMUP_JOBS = 100; // small populate to warm V8 JIT + PG plan cache before queries
 const SAMPLES_PER_METHOD = 100;
 const PERF_TIMEOUT_MS = 5 * 60_000; // 5-minute ceiling for the whole bench
 
@@ -35,16 +43,6 @@ interface Measurement {
 
 class BenchHarness {
   private measurements: Measurement[] = [];
-  triggerOverheadMsPerStateChange = 0;
-  tBaselineLifecycleMs = 0;
-  tWithTriggerLifecycleMs = 0;
-
-  recordTriggerOverhead(args: { tBaseline: number; tWithTrigger: number; stateTransitions: number }) {
-    this.tBaselineLifecycleMs = args.tBaseline;
-    this.tWithTriggerLifecycleMs = args.tWithTrigger;
-    const delta = args.tWithTrigger - args.tBaseline;
-    this.triggerOverheadMsPerStateChange = delta / args.stateTransitions;
-  }
 
   async sampleMethod(name: string, n: number, fn: () => Promise<unknown>): Promise<void> {
     const samples: number[] = [];
@@ -78,11 +76,7 @@ class BenchHarness {
   report(): void {
     const lines: string[] = [];
     lines.push('');
-    lines.push('### Perf bench — chronicle scale (1k jobs, single-process)');
-    lines.push('');
-    lines.push(`- Populate baseline (no trigger):  ${this.tBaselineLifecycleMs.toFixed(1)} ms`);
-    lines.push(`- Populate with trigger:           ${this.tWithTriggerLifecycleMs.toFixed(1)} ms`);
-    lines.push(`- Per-state-transition overhead:   ${this.triggerOverheadMsPerStateChange.toFixed(3)} ms`);
+    lines.push('### Perf bench — chronicle read methods (1k populated jobs, single-process)');
     lines.push('');
     lines.push('| Method                                | mean (ms) | median (ms) | p99 (ms) |');
     lines.push('|---------------------------------------|-----------|-------------|----------|');
@@ -96,8 +90,8 @@ class BenchHarness {
 }
 
 /**
- * Populate the queue with N jobs via the full pg-boss lifecycle:
- *   N × send → 3 trigger fires per job (created on INSERT, active on fetch UPDATE, completed on complete UPDATE).
+ * Populate the queue with N jobs via the full pg-boss happy-path lifecycle:
+ *   N × send → fetch → complete (3 state transitions per job: created → active → completed).
  *
  * Returns the array of job IDs in creation order.
  */
@@ -122,43 +116,25 @@ async function populateLifecycle(boss: Harness['boss'], n: number): Promise<stri
   return jobIds;
 }
 
-describe('Perf — chronicle scale (1k jobs)', () => {
+describe('Perf — chronicle read methods (1k jobs)', () => {
   let env: Harness | null = null;
   let knownJobId: string;
   const bench = new BenchHarness();
 
   beforeAll(async () => {
-    // Single warm container for both phases. Empirically, two cold containers
-    // produce a confounded trigger-overhead measurement: Docker startup,
-    // Postgres filesystem cache, and V8 JIT differ between cold runs in ways
-    // that swamp the trigger's per-state-change cost (the original two-cold
-    // design measured negative overhead because the second populate benefited
-    // from warm caches the first didn't have). One container with TRUNCATE
-    // between phases keeps everything but the install status of pg-bossier
-    // identical — the only variable that should drive the timing delta.
     env = await startHarness();
     try {
-      // -------- Phase 1: baseline populate, no pg-bossier installed --------
-      const t0p1 = performance.now();
-      await populateLifecycle(env.boss, N_JOBS);
-      const tBaseline = performance.now() - t0p1;
-
-      // Reset between phases — drop the jobs but keep pgboss.queue config and
-      // the warm Postgres process. CASCADE clears any partitions on the
-      // partitioned pgboss.job table.
+      // -------- Phase 0: warmup populate (untimed, discarded) --------
+      // 100 jobs through the lifecycle, then TRUNCATE. JITs pg-boss's hot
+      // paths and warms Postgres's plan cache for INSERT/UPDATE on
+      // pgboss.job. Without this the first query of each shape pays a
+      // plan-cache compilation tax that inflates p99 noisily.
+      await populateLifecycle(env.boss, N_WARMUP_JOBS);
       await env.pool.query('TRUNCATE pgboss.job CASCADE');
 
-      // -------- Phase 2: populate with pg-bossier installed --------
+      // -------- Phase 1: install pg-bossier, populate 1k jobs --------
       await install(env.pool);
-      const t0p2 = performance.now();
       const jobIds = await populateLifecycle(env.boss, N_JOBS);
-      const tWithTrigger = performance.now() - t0p2;
-
-      bench.recordTriggerOverhead({
-        tBaseline,
-        tWithTrigger,
-        stateTransitions: N_JOBS * 3,
-      });
 
       if (jobIds.length === 0) {
         throw new Error('populateLifecycle returned no job ids — bench cannot sample known-id methods');
@@ -172,7 +148,7 @@ describe('Perf — chronicle scale (1k jobs)', () => {
       throw err;
     }
 
-    // -------- Phase 3: query measurements against the populated chronicle --------
+    // -------- Phase 2: query measurements against the populated chronicle --------
     const client = bossier({ boss: env.boss, pool: env.pool });
     await bench.sampleMethod('findById(known)',                SAMPLES_PER_METHOD, () => client.findById(knownJobId));
     await bench.sampleMethod('findById(unknown)',              SAMPLES_PER_METHOD, () => client.findById(randomUUID()));
@@ -192,7 +168,7 @@ describe('Perf — chronicle scale (1k jobs)', () => {
     if (env) await env.teardown();
   });
 
-  it('captured 10 query measurements (trigger overhead is a separate scalar)', () => {
+  it('captured 10 query measurements', () => {
     expect(bench.allMeasurements().length).toBe(10);
   });
 
@@ -206,9 +182,5 @@ describe('Perf — chronicle scale (1k jobs)', () => {
     for (const m of bench.allMeasurements()) {
       expect(m.p99, `p99 of ${m.name}`).toBeLessThan(1000);
     }
-  });
-
-  it('per-state-transition trigger overhead is under 50 ms (sanity check)', () => {
-    expect(bench.triggerOverheadMsPerStateChange).toBeLessThan(50);
   });
 });
