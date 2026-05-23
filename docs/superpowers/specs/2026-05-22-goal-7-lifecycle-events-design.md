@@ -3,12 +3,18 @@
 **Date:** 2026-05-22 (v1) · 2026-05-23 (v2)
 **Sub-issue:** [#8](https://github.com/elfensky/pg-bossier/issues/8)
 **Parent:** [#1](https://github.com/elfensky/pg-bossier/issues/1) (charter)
-**Status:** Design **v2** — pre-implementation. Incorporates findings from the
-2026-05-23 4-way adversarial review (Codex / Gemini / Sonnet / Opus);
-synthesis and raw critiques live in
+**Status:** ✅ **Delivered 2026-05-23** — merge `68fd7bb` of
+`feature/goal-7-lifecycle-events` into `develop`. Issue #8 closed.
+Design **v2** incorporates findings from the 2026-05-23 4-way
+adversarial review (Codex / Gemini / Sonnet / Opus); synthesis and raw
+critiques live in
 [`docs/superpowers/debates/2026-05-23-goal-7-spec-adversarial-review/`](../debates/2026-05-23-goal-7-spec-adversarial-review/).
-Builds on the storage substrate (PR #15) and the unified client (2026-05-22).
-No code yet.
+Implementation plan: [`docs/superpowers/plans/2026-05-23-goal-7-lifecycle-events-plan.md`](../plans/2026-05-23-goal-7-lifecycle-events-plan.md)
+— 22 TDD-shaped tasks across 21 task commits + 1 spec correction
+(see commit `f604e37`: the retry sequence is five events, not six —
+pg-boss's `fetchNextJob` skips a `created` notification for retried
+attempts). Builds on the storage substrate (PR #15) and the unified
+client (2026-05-22). 87/87 integration tests green on `develop`.
 
 ---
 
