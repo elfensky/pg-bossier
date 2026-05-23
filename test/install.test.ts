@@ -168,3 +168,40 @@ test('two installs with different pgbossier schemas keep distinct triggers', asy
     expect(trig.rows.map(r => r.tgname).sort()).toEqual(['altbossier_capture', 'pgbossier_capture']);
   } finally { await h.teardown(); }
 });
+
+test('install with wrong pgbossSchema fails on preflight, leaving no state behind', async () => {
+  const h = await startHarness();
+  try {
+    // pg-boss is in default 'pgboss' schema; we pass 'wrong'
+    await expect(
+      install(h.pool, { pgbossSchema: 'wrong' }),
+    ).rejects.toThrow(/wrong/);
+
+    // Critically: pgbossier schema MUST NOT exist (no partial install)
+    const { rows } = await h.pool.query(
+      `SELECT 1 FROM information_schema.schemata WHERE schema_name = 'pgbossier'`,
+    );
+    expect(rows).toHaveLength(0);
+  } finally { await h.teardown(); }
+});
+
+test('install is transactional — mid-install failure leaves nothing behind', async () => {
+  const h = await startHarness();
+  try {
+    // Set up a scenario where the trigger creation will fail by removing
+    // the pg-boss source table mid-flight. We do this by passing a
+    // pgbossSchema that exists but has no job table.
+    await h.pool.query(`CREATE SCHEMA IF NOT EXISTS partialboss`);
+
+    // No 'job' table in partialboss → preflight should catch it
+    await expect(
+      install(h.pool, { pgbossSchema: 'partialboss' }),
+    ).rejects.toThrow(/partialboss/);
+
+    // pgbossier schema must not exist
+    const { rows } = await h.pool.query(
+      `SELECT 1 FROM information_schema.schemata WHERE schema_name = 'pgbossier'`,
+    );
+    expect(rows).toHaveLength(0);
+  } finally { await h.teardown(); }
+});

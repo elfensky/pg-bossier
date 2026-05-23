@@ -20,15 +20,32 @@ export async function install(
     pgbossier: options?.schema,
     pgboss:    options?.pgbossSchema,
   });
-  await pool.query(schemaSql(s));
-  await pool.query(sequenceSql(s));
-  await pool.query(recordTableSql(s));
-  await pool.query(recordSeqColumnSql(s));
-  await pool.query(recordSeqIndexSql(s));
-  for (const idx of recordIndexesSql(s)) await pool.query(idx);
-  await pool.query(captureFunctionSql(s));
-  await pool.query(captureTriggerSql(s));
-  await pool.query(backfillSql(s));
+
+  const client = await pool.connect();
+  try {
+    // Preflight: confirm the pg-boss source table exists. Fails fast with
+    // a clear error before any DDL runs.
+    await client.query(`SELECT 1 FROM ${s.pgboss}.job LIMIT 0`);
+
+    // Atomic install: BEGIN/COMMIT around all DDL. Postgres supports DDL
+    // in transactions; a mid-install failure rolls back everything.
+    await client.query('BEGIN');
+    await client.query(schemaSql(s));
+    await client.query(sequenceSql(s));
+    await client.query(recordTableSql(s));
+    await client.query(recordSeqColumnSql(s));
+    await client.query(recordSeqIndexSql(s));
+    for (const idx of recordIndexesSql(s)) await client.query(idx);
+    await client.query(captureFunctionSql(s));
+    await client.query(captureTriggerSql(s));
+    await client.query(backfillSql(s));
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => { /* connection may be dead */ });
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function uninstall(
