@@ -245,3 +245,42 @@ test('subscribe() with already-aborted signal throws AbortError', async () => {
   ac.abort();
   await expect(subscribe(h.pool, { signal: ac.signal })).rejects.toThrow(/abort/i);
 });
+
+test('two subscribers on the same pool both receive every event', async () => {
+  const a = await subscribe(h.pool);
+  const b = await subscribe(h.pool);
+  const aSeen: string[] = [], bSeen: string[] = [];
+  a.on('job', (e) => aSeen.push(e.jobId));
+  b.on('job', (e) => bSeen.push(e.jobId));
+
+  const queue = 'evt-broadcast';
+  await h.boss.createQueue(queue);
+  const id = await h.boss.send(queue, {});
+  await new Promise((r) => setTimeout(r, 200));
+
+  expect(aSeen).toContain(id!);
+  expect(bSeen).toContain(id!);
+  await a.close(); await b.close();
+});
+
+test('install() backfill does NOT fire events for historical pgboss.job rows', async () => {
+  const h2 = await startHarness();
+  try {
+    const queue = 'evt-backfill';
+    await h2.boss.createQueue(queue);
+    await h2.boss.send(queue, { before: 'install' });
+
+    await install(h2.pool);
+
+    const events = await subscribe(h2.pool);
+    const seen: string[] = [];
+    events.on('job', (e) => seen.push(e.event));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(seen.length).toBe(0);
+
+    await h2.boss.send(queue, { after: 'subscribe' });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(seen).toContain('created');
+    await events.close();
+  } finally { await h2.teardown(); }
+});
