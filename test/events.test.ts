@@ -145,6 +145,26 @@ test("unknown state passes through with event = state and fires 'warning' once",
   await events.close();
 });
 
+test("thrown handler routes to 'error' (reason='handler'); stream continues", async () => {
+  const events = await subscribe(h.pool);
+  const errors: { reason: string; error: unknown }[] = [];
+  const after: string[] = [];
+  events.on('error', (ev) => errors.push({ reason: ev.reason, error: ev.error }));
+  events.on('completed', () => { throw new Error('boom from handler'); });
+  events.on('job', (e) => after.push(e.event));
+
+  const queue = 'evt-handler-throw';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {});
+  await h.boss.fetch(queue);
+  await h.boss.complete(queue, jobId!, { ok: true });
+  await new Promise((r) => setTimeout(r, 200));
+
+  expect(errors.some((e) => e.reason === 'handler')).toBe(true);
+  expect(after).toContain('completed');
+  await events.close();
+});
+
 test("malformed JSON fires 'error' (reason='parse'); stream continues", async () => {
   const events = await subscribe(h.pool);
   const errors: { reason: string }[] = [];

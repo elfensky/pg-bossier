@@ -97,6 +97,19 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
     this.emit('error', event);
   }
 
+  private safeEmit<K extends keyof BossierEventsMap>(
+    name: K, ...args: BossierEventsMap[K]
+  ): void {
+    const listeners = this.listeners(name).slice();
+    for (const listener of listeners) {
+      try {
+        (listener as (...a: BossierEventsMap[K]) => void)(...args);
+      } catch (err) {
+        this.emitError('handler', err);
+      }
+    }
+  }
+
   private handleNotification(msg: { channel: string; payload?: string }): void {
     if (this.closed) return;
     if (msg.channel !== 'pgbossier_job' || msg.payload === undefined) return;
@@ -131,7 +144,7 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
     };
 
     if (eventName) {
-      this.emit(eventName, jobEvent);   // per-type first
+      this.safeEmit(eventName, jobEvent);   // per-type first
     } else {
       if (!this.seenUnknownStates.has(state)) {
         this.seenUnknownStates.add(state);
@@ -141,7 +154,7 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
         this.emit('warning', warning);
       }
     }
-    this.emit('job', jobEvent);          // then catch-all
+    this.safeEmit('job', jobEvent);          // then catch-all
   }
 
   async close(): Promise<void> {
