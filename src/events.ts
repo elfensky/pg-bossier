@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { Pool, PoolClient } from 'pg';
 import type { JobState } from './read.js';
+import type { SchemaNames } from './sql.js';
 
 export type JobEventName =
   | 'created' | 'started' | 'completed' | 'failed' | 'cancelled' | 'retried';
@@ -74,6 +75,7 @@ const STATE_TO_EVENT: Record<string, JobEventName> = {
 
 class BossierEventsImpl extends EventEmitter implements BossierEvents {
   private pool: Pool;
+  private schemas: SchemaNames;
   private client: PoolClient | null = null;
   private closed = false;
   private seenUnknownStates = new Set<string>();
@@ -82,9 +84,10 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
   /** True only for the very first open() call — used to defer the 'connected' emit. */
   private isFirstOpen = true;
 
-  constructor(pool: Pool) {
+  constructor(pool: Pool, schemas: SchemaNames) {
     super();
     this.pool = pool;
+    this.schemas = schemas;
   }
 
   // Stable references for listener removal on release.
@@ -98,7 +101,7 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
     this.client.on('notification', this.boundNotification);
     this.client.on('error', this.boundError);
     this.client.on('end', this.boundEnd);
-    await this.client.query('LISTEN pgbossier_job');
+    await this.client.query(`LISTEN ${this.schemas.pgbossier}_job`);
     this.failureCount = 0;
     if (this.isFirstOpen) {
       this.isFirstOpen = false;
@@ -169,7 +172,8 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
 
   private handleNotification(msg: { channel: string; payload?: string }): void {
     if (this.closed) return;
-    if (msg.channel !== 'pgbossier_job' || msg.payload === undefined) return;
+    const expectedChannel = `${this.schemas.pgbossier}_job`;
+    if (msg.channel !== expectedChannel || msg.payload === undefined) return;
 
     let parsed: { job_id?: string; queue?: string; attempt?: number;
                   state?: string; seq?: number | string; captured_at?: string };
@@ -223,7 +227,7 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
     this.reconnectCancellers = [];
     if (this.client) {
       this.removeClientListeners();
-      try { await this.client.query('UNLISTEN pgbossier_job'); } catch { /* connection may be dead */ }
+      try { await this.client.query(`UNLISTEN ${this.schemas.pgbossier}_job`); } catch { /* connection may be dead */ }
       this.client.release();
       this.client = null;
     }
@@ -234,12 +238,13 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
 
 export async function subscribe(
   pool: Pool,
+  schemas: SchemaNames,
   opts: SubscribeOptions = {},
 ): Promise<BossierEvents> {
   if (opts.signal?.aborted) {
     throw new DOMException('Aborted', 'AbortError');
   }
-  const events = new BossierEventsImpl(pool);
+  const events = new BossierEventsImpl(pool, schemas);
   if (opts.signal) {
     opts.signal.addEventListener('abort', () => { void events.close(); }, { once: true });
   }

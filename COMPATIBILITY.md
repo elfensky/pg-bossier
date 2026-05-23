@@ -114,4 +114,29 @@ The capture trigger's `pg_notify` is enqueued and delivered on transaction commi
 
 ### Channel name
 
-`pgbossier_job` — pg-bossier-owned per the namespacing constraint in issue #1. Non-Node consumers can `LISTEN pgbossier_job` directly.
+**Channel name.** The default NOTIFY channel is `pgbossier_job`. If you
+pass a non-default `schema` option to `bossier()`, the channel becomes
+`${schema}_job`. The trigger name follows the same pattern:
+`${schema}_capture`. This prevents collisions when multiple pg-bossier
+installs share a database.
+
+## Install constraints (Goal 9)
+
+### `--ignore-scripts` blocks the build step
+
+`npm install` from a git URL relies on the `prepare` lifecycle script
+running `tsc` to produce `dist/`. Consumers running `npm ci
+--ignore-scripts` (common in security-conscious CI environments) on a
+git URL install will get an un-built package.
+
+Workarounds:
+- Use a published npm tarball (`npm install pg-bossier@x.y.z`) — the
+  tarball contains pre-built `dist/`, no `prepare` re-run needed.
+- Use a local pack (`npm pack` then `npm install
+  pg-bossier-x.y.z.tgz`) — same as above.
+
+### Engines
+
+pg-bossier requires Node ≥ 18.3 (for `util.parseArgs`, stabilized in
+that release). The CLI is the only piece that uses `parseArgs`; the
+JS API works on Node ≥ 18.0.
