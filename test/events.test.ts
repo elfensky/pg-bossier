@@ -2,6 +2,11 @@ import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 import { install } from '../src/install.js';
 import { subscribe } from '../src/events.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -283,4 +288,23 @@ test('install() backfill does NOT fire events for historical pgboss.job rows', a
     expect(seen).toContain('created');
     await events.close();
   } finally { await h2.teardown(); }
+});
+
+test('src/events.ts imports only from pg and node built-ins', () => {
+  const source = readFileSync(resolve(__dirname, '../src/events.ts'), 'utf8');
+  const importRe = /from\s+['"]([^'"]+)['"]/g;
+  const found = new Set<string>();
+  let match: RegExpMatchArray | null;
+  while ((match = importRe.exec(source)) !== null) found.add(match[1]!);
+
+  for (const dep of found) {
+    const allowed = dep === 'pg'
+      || dep.startsWith('node:')
+      || dep.startsWith('./')
+      || dep.startsWith('../');
+    expect({ dep, allowed }).toEqual({ dep, allowed: true });
+  }
+  for (const dep of found) {
+    expect(dep.includes('pg-boss/src')).toBe(false);
+  }
 });
