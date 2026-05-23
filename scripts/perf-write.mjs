@@ -5,7 +5,7 @@
 // Used by .github/workflows/perf-history.yml on push to develop. The CI step
 // runs `npm run test:perf` (which writes perf-output.json), then runs this
 // script to append a record to perf-metrics.jsonl on the orphan
-// `perf-metrics` branch.
+// `metrics` branch.
 //
 // Stdlib-only — no npm deps. Run from the repo root.
 //

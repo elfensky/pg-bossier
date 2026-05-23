@@ -1,13 +1,13 @@
 # perf-history — issue #23.
 # Runs the vitest perf bench on every push to develop, then appends a
-# record to perf-metrics.jsonl on the orphan `perf-metrics` branch.
+# record to perf-metrics.jsonl on the orphan `metrics` branch.
 #
 # Concurrency: serialized via `concurrency` with `cancel-in-progress: false`
 # so back-to-back develop merges don't drop baselines. The push step does
 # a `git fetch + rebase + push` retry loop because GitHub Actions doesn't
 # guarantee FIFO ordering on a pending queue.
 #
-# Permissions: contents:write — needs to push to the perf-metrics branch.
+# Permissions: contents:write — needs to push to the metrics branch.
 # Fork-PR safety isn't a concern here because the workflow only triggers
 # on `push: develop`, which only base-branch maintainers can perform.
 name: perf-history
@@ -16,11 +16,11 @@ on:
   push:
     branches: [develop]
 
-# Serialize pushes to perf-metrics. The group key embeds the workflow name so
+# Serialize pushes to the metrics branch. The group key embeds the workflow name so
 # this concurrency lane is dedicated to perf history and doesn't collide
 # with other workflows.
 concurrency:
-  group: ${{ github.workflow }}-perf-metrics
+  group: ${{ github.workflow }}-metrics
   cancel-in-progress: false
 
 permissions:
@@ -63,7 +63,7 @@ jobs:
           cp scripts/perf-write.mjs   "${RUNNER_TEMP}/perf/perf-write.mjs"
           cp scripts/perf-methods.mjs "${RUNNER_TEMP}/perf/perf-methods.mjs"
 
-      - name: Append to perf-metrics with fetch+rebase+retry
+      - name: Append to metrics branch with fetch+rebase+retry
         env:
           PB_GITHUB_SHA: ${{ github.sha }}
           PB_GITHUB_REF_NAME: ${{ github.ref_name }}
@@ -74,10 +74,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Switch to perf-metrics (orphan branch — assumed to exist;
-          # one-time init: see docs/perf-metrics-init.md).
-          git fetch origin perf-metrics
-          git checkout perf-metrics
+          # Switch to the metrics orphan branch — assumed to exist;
+          # one-time init: see docs/metrics-init.md.
+          git fetch origin metrics
+          git checkout metrics
 
           # Restore the staged perf-output + scripts (the checkout above
           # nuked develop's tree).
@@ -109,21 +109,21 @@ jobs:
                      -m "trigger: ${PB_GITHUB_EVENT_NAME} on ${PB_GITHUB_REF_NAME}"
 
           # Push with retry — handles the rare race where another
-          # serialized job updated perf-metrics between our fetch and
+          # serialized job updated the metrics branch between our fetch and
           # push. Counts retries (not total attempts): initial push +
           # up to 2 rebase-retries = 3 total push tries. Given the
           # workflow concurrency.group queues runs, at most one genuine
           # concurrent writer is possible, so 3 is overkill but cheap.
           attempt=0
-          until git push origin perf-metrics; do
+          until git push origin metrics; do
             attempt=$((attempt + 1))
             if [ "$attempt" -ge 3 ]; then
-              echo "::error::push to perf-metrics failed after $attempt retries"
+              echo "::error::push to metrics branch failed after $attempt retries"
               exit 1
             fi
-            echo "Push failed (retry $attempt) — rebasing on origin/perf-metrics and retrying"
-            git fetch origin perf-metrics
-            git rebase origin/perf-metrics || {
+            echo "Push failed (retry $attempt) — rebasing on origin/metrics and retrying"
+            git fetch origin metrics
+            git rebase origin/metrics || {
               echo "::error::rebase failed — aborting"
               exit 1
             }

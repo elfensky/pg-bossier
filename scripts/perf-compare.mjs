@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // perf-compare.mjs — Compare a PR's vitest bench output against the latest
-// `develop` baseline stored on the `perf-metrics` orphan branch, write a
+// `develop` baseline stored on the orphan `metrics` branch, write a
 // Markdown diff to $GITHUB_STEP_SUMMARY, and exit nonzero on regression.
 //
 // Used by .github/workflows/perf-pr.yml on pull_request. Exit-nonzero is the
@@ -138,7 +138,7 @@ if (!baseline) {
     [
       '## ⏱ Perf bench — no baseline yet',
       '',
-      'No `develop` perf record found on the `perf-metrics` branch. After this PR is merged, the first `push: develop` workflow run will establish the baseline. Subsequent PRs will diff against it.',
+      'No `develop` perf record found on the `metrics` branch. After this PR is merged, the first `push: develop` workflow run will establish the baseline. Subsequent PRs will diff against it.',
       '',
       'PR results (this run):',
       '',
