@@ -179,6 +179,48 @@ import type { ProgressResult } from 'pg-bossier';
 // { progress: TProgress; attempt: number }
 ```
 
+### Lifecycle events (Goal 7)
+
+Subscribe to job state transitions instead of polling:
+
+```ts
+import { bossier } from 'pg-bossier';
+
+const client = bossier({ boss, pool });
+const events = await client.subscribe();
+let lastSeq = 0n;
+
+events.on('connected', () => console.log('event stream live'));
+events.on('failed', e => console.warn(`job ${e.jobId} failed on attempt ${e.attempt}`));
+events.on('job', e => { lastSeq = e.seq; });
+events.on('error', async e => {
+  if (e.reason === 'gap') {
+    const missed = await client.getEventsSince(lastSeq);
+    for (const row of missed) { lastSeq = row.seq; handleCatchUp(row); }
+  }
+});
+
+process.on('SIGINT', async () => {
+  await events.close();
+  await boss.stop();
+});
+```
+
+**Event types.** `'created'`, `'started'`, `'completed'`, `'failed'`, `'cancelled'`, `'retried'`. Catch-all `'job'`. Subscriber-level `'connected'` (every successful LISTEN), `'warning'` (first occurrence of an unknown pg-boss state), `'error'` (`reason: 'gap' | 'parse' | 'handler'`).
+
+**Delivery contract.** At most once. On a connection drop the subscriber auto-reconnects with exponential backoff + jitter and emits `'error'` with `reason: 'gap'`. Durable replay via `getEventsSince(seq)`. **Important scope:** the audit table holds the final state per attempt, not the full transition sequence within an attempt — `getEventsSince` recovers latest-state-per-attempt only.
+
+**`attempt` semantics.** `created` carries `0` for a freshly-sent job. `started`/`completed`/`failed`/`cancelled` carry the attempt number that was active when the transition happened. `retried` fires when an attempt fails but a retry remains — it carries the FAILING attempt's number (the OLD one). The NEXT attempt's `started` event carries the new attempt number (e.g. `1`). **No `'created'` event fires for retried attempts** — pg-boss's `fetchNextJob` bumps `retry_count` and sets `state='active'` in a single UPDATE, so the retry row goes directly to `started(N+1)`.
+
+For a job that fails once and then succeeds (retryLimit = 1), the consumer sees five events:
+`created(0)` → `started(0)` → `retried(0)` → `started(1)` → `completed(1)`.
+
+**Connection cost.** Each live subscriber holds one dedicated pool connection. Size your pool accordingly. For long-running processes only (web servers, workers) — not lambdas / FaaS.
+
+**Unsupported topologies.** PgBouncer in transaction-pool mode silently breaks `LISTEN`. Use session-pool mode, a direct Postgres connection, or skip PgBouncer for the subscriber's connection. See [`COMPATIBILITY.md`](./COMPATIBILITY.md).
+
+**MaxListenersExceededWarning.** If you add many `'job'` listeners (e.g. for metrics fan-out), call `events.setMaxListeners(0)` to suppress Node's 10-listener default warning.
+
 ### Uninstall
 
 Removal is symmetric — one statement drops everything pg-bossier created and leaves `pgboss.job` untouched:
