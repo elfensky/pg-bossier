@@ -117,3 +117,49 @@ test('seq on emitted events is monotonically increasing', async () => {
   }
   await events.close();
 });
+
+test("unknown state passes through with event = state and fires 'warning' once", async () => {
+  const events = await subscribe(h.pool);
+  const jobEvents: { event: string; state: string }[] = [];
+  const warnings: { unknownState: string; jobId: string }[] = [];
+  events.on('job', (e) => jobEvents.push({ event: e.event, state: e.state }));
+  events.on('warning', (w) => warnings.push({ unknownState: w.unknownState, jobId: w.jobId }));
+
+  const fakeId = '00000000-0000-0000-0000-000000000aaa';
+  const payload1 = JSON.stringify({
+    job_id: fakeId, queue: 'q', attempt: 0, state: 'paused', seq: 999999, captured_at: new Date().toISOString(),
+  });
+  const payload2 = JSON.stringify({
+    job_id: fakeId, queue: 'q', attempt: 1, state: 'paused', seq: 1000000, captured_at: new Date().toISOString(),
+  });
+  await h.pool.query(`SELECT pg_notify('pgbossier_job', $1)`, [payload1]);
+  await h.pool.query(`SELECT pg_notify('pgbossier_job', $1)`, [payload2]);
+  await new Promise((r) => setTimeout(r, 100));
+
+  expect(jobEvents).toEqual([
+    { event: 'paused', state: 'paused' },
+    { event: 'paused', state: 'paused' },
+  ]);
+  expect(warnings.length).toBe(1);
+  expect(warnings[0]).toEqual({ unknownState: 'paused', jobId: fakeId });
+  await events.close();
+});
+
+test("malformed JSON fires 'error' (reason='parse'); stream continues", async () => {
+  const events = await subscribe(h.pool);
+  const errors: { reason: string }[] = [];
+  let jobEventsAfter = 0;
+  events.on('error', (ev) => errors.push({ reason: ev.reason }));
+  events.on('job', () => { jobEventsAfter += 1; });
+
+  await h.pool.query(`SELECT pg_notify('pgbossier_job', $1)`, ['{not valid json']);
+
+  const queue = 'evt-after-parse-error';
+  await h.boss.createQueue(queue);
+  await h.boss.send(queue, {});
+  await new Promise((r) => setTimeout(r, 150));
+
+  expect(errors.map((e) => e.reason)).toContain('parse');
+  expect(jobEventsAfter).toBeGreaterThan(0);
+  await events.close();
+});

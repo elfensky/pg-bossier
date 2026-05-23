@@ -76,6 +76,7 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
   private pool: Pool;
   private client: PoolClient | null = null;
   private closed = false;
+  private seenUnknownStates = new Set<string>();
 
   constructor(pool: Pool) {
     super();
@@ -91,15 +92,21 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
     setImmediate(() => { if (!this.closed) this.emit('connected'); });
   }
 
+  private emitError(reason: ErrorReason, error: unknown): void {
+    const event: BossierErrorEvent = { reason, error, at: new Date() };
+    this.emit('error', event);
+  }
+
   private handleNotification(msg: { channel: string; payload?: string }): void {
+    if (this.closed) return;
     if (msg.channel !== 'pgbossier_job' || msg.payload === undefined) return;
 
     let parsed: { job_id?: string; queue?: string; attempt?: number;
                   state?: string; seq?: number | string; captured_at?: string };
     try {
       parsed = JSON.parse(msg.payload) as typeof parsed;
-    } catch {
-      // Task 7 wires this to 'error' with reason='parse'.
+    } catch (err) {
+      this.emitError('parse', err);
       return;
     }
 
@@ -108,6 +115,7 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
         typeof attempt !== 'number' || typeof state !== 'string' ||
         (typeof seq !== 'number' && typeof seq !== 'string') ||
         typeof captured_at !== 'string') {
+      this.emitError('parse', new Error(`pgbossier: malformed notification payload: ${msg.payload}`));
       return;
     }
 
@@ -125,7 +133,13 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
     if (eventName) {
       this.emit(eventName, jobEvent);   // per-type first
     } else {
-      // Unknown state — Task 7 wires the 'warning' event.
+      if (!this.seenUnknownStates.has(state)) {
+        this.seenUnknownStates.add(state);
+        const warning: BossierWarningEvent = {
+          unknownState: state, jobId: job_id, at: new Date(),
+        };
+        this.emit('warning', warning);
+      }
     }
     this.emit('job', jobEvent);          // then catch-all
   }
