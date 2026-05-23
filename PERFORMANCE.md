@@ -4,7 +4,9 @@ This file is the published record of pg-bossier's query performance against the 
 
 ## What this measures
 
-The bench (`test/perf/chronicle-scale.test.ts`) runs in a single process against a real Postgres instance (via testcontainers). It begins with a warmup phase: 100 jobs are sent, fetched, and completed through pg-boss's normal lifecycle, then discarded — these do not appear in the measurements. After warmup, pg-bossier is installed and 1,000 jobs are populated through the pg-boss happy-path lifecycle (send → fetch → complete), which fires three trigger captures per job into the chronicle table. Each of the ten Goal 5 read methods is then sampled 100 times using `performance.now()`. The bench reports mean, median, and p99 per method in a markdown table written to stdout.
+The bench (`test/perf/chronicle-scale.bench.ts`) runs in a single process against a real Postgres instance (via testcontainers). It begins with a warmup phase: 100 jobs are sent, fetched, and completed through pg-boss's normal lifecycle, then discarded — these do not appear in the measurements. After warmup, pg-bossier is installed and 1,000 jobs are populated through the pg-boss happy-path lifecycle (send → fetch → complete), which fires three trigger captures per job into the chronicle table. Each of the ten Goal 5 read methods is then sampled 100 times via vitest's `bench()` (pinned to `iterations: 100, time: 0, warmupIterations: 0` so the sample count is deterministic). vitest's underlying tinybench computes mean, median, p99, sd, and related stats per method. The numbers are surfaced both as a console table (default reporter) and as a structured `perf-output.json` (issue #23 CI history).
+
+> **Note (issue #23):** The bench was restructured from a hand-rolled `it()`-based sampler to vitest's `bench()` blocks on 2026-05-23. The methodology change means the first-measurement numbers below are **soft-invalidated** — they are kept here for historical reference. The new baseline of record is what CI publishes to the `perf-metrics` orphan branch (see "CI-anchored history" below). Per-method published budgets in the next section retain their 2.0×-of-first-measurement headroom and remain the operational guardrail until ≥20 develop runs accumulate, at which point they will be re-derived from the CI baseline.
 
 ## What this does NOT measure
 
@@ -58,10 +60,12 @@ Run the performance bench with:
 npm run test:perf
 ```
 
-The default vitest reporter suppresses `console.log` output from passing tests, which means the markdown table will not appear in the terminal. To see it, invoke vitest directly with the verbose reporter:
+This invokes `vitest bench --config vitest.perf.config.ts --run`. The default benchmark reporter prints a sorted comparison table to stdout, and the JSON reporter writes `perf-output.json` for downstream tooling.
+
+To inspect the JSON output:
 
 ```sh
-npx vitest run test/perf/chronicle-scale.test.ts --reporter=verbose
+cat perf-output.json | jq '.files[].groups[].benchmarks[] | {name, mean, median, p99}'
 ```
 
 ## How to interpret
@@ -72,14 +76,24 @@ When a fresh run on similar hardware produces numbers more than 2× the publishe
 
 Three runs were taken for the first measurement (runs 7, 8, and 9 of the bench). Runs 7 and 9 produced consistent numbers, broadly in line with the table above. Run 8 produced p99s 5–50× higher across the board — likely caused by transient host load during that run rather than any change in the code or schema. This documents what the bench's noise looks like at N=1000 with 100 samples: tail metrics are sensitive to a single outlier, and host-level interference is real. It is the reason the published budget uses a 2.0× multiplier and the interpretation guidance requires three consecutive runs before treating an exceedance as a regression.
 
+## CI-anchored history (issue #23)
+
+The laptop-based first measurement is too noisy and environment-specific to anchor regression detection. Issue #23 layers a CI-anchored history on top of the bench:
+
+- `.github/workflows/perf-history.yml` runs the bench on every `push` to `develop`, then appends one JSONL record to `perf-metrics.jsonl` on the orphan **`perf-metrics`** branch. The record includes the runner fingerprint (image OS, image version, CPU model, Node version, vitest version, package-lock hash) so a runner-image drift can be detected as a separate signal from a code regression.
+- `.github/workflows/perf-pr.yml` runs the bench on every pull request, fetches the latest develop record from `perf-metrics`, and writes a Markdown diff to `$GITHUB_STEP_SUMMARY`. The diff applies thresholds — `🟡 elevated` at mean >+50% or p99 >+100%; `🔴 regression` at mean >+100% or p99 >+400%. A 🔴 fails the `perf-regression` status check (non-required in branch protection — visibility without blocking).
+- `scripts/perf-write.mjs` and `scripts/perf-compare.mjs` implement the JSONL writer and the PR comparer. Both are stdlib-only Node scripts.
+- One-time orphan-branch init: see `docs/perf-metrics-init.md`.
+
+A baseline is considered **stale** when it is older than 14 days or its fingerprint differs from the PR run; in that case the comparison still renders but the summary flags it. Treat 🔴 with a stale-baseline warning as suspect until fresh develop runs replenish the chronicle.
+
 ## Future scenarios (follow-up #21)
 
-- 10k / 100k / 1M-job scale extensions (likely separate `test/perf/chronicle-NNk.test.ts` files).
+- 10k / 100k / 1M-job scale extensions (likely separate `test/perf/chronicle-NNk.bench.ts` files).
 - **Direct DB-side trigger-overhead measurement** (e.g. `pg_stat_statements` / per-call `EXPLAIN ANALYZE` — the populate-time-delta approach failed at N=1000 because warmup noise dominates; this is the right path forward for measuring per-trigger cost).
 - Failure-injection variants so `getRetryHistory` exercises real retry chains.
 - Multi-queue cardinality populates.
 - Active-jobs scenarios for `listLongRunning`.
-- CI integration on a stable runner, with workflow artifacts preserving the markdown table.
 - Hard budget assertions (tighten the v1 sanity-only assertions into enforced CI gates).
 - Per-feature budget allocation (only if it earns its keep).
-- Violation policy.
+- Violation policy (when 🔴 starts blocking merges — needs ≥20 develop runs first to characterize the runner's noise floor).
