@@ -45,3 +45,35 @@ This document classifies the surfaces. Two related decisions are tracked in #9 a
 - **Update cadence** — whether this document is revised on every PR that touches a pg-boss surface, or on a separate audit cadence.
 
 As later goals land they will add surfaces — `work` and the ORM transaction adapters to Stable, more `pgboss.job` columns to Transitional. Extend the tables above in the same change.
+
+## Unsupported topologies (Goal 7)
+
+Postgres `LISTEN/NOTIFY` — pg-bossier's lifecycle event transport — has hard topology constraints. The subscriber's connection must reach the primary through a non-multiplexed session.
+
+### PgBouncer in transaction-pool mode — unsupported
+
+In transaction-pool mode, PgBouncer reuses backends between transactions. `LISTEN` registers on a specific backend; when the proxy hands the next transaction to a different backend, the LISTEN is invisible to it. The subscriber sees no errors and no events — a silent failure.
+
+Three viable consumer options:
+
+1. Route the subscriber connection through PgBouncer in **session-pool** mode.
+2. Use a separate Postgres connection (no PgBouncer) for the subscriber.
+3. Connect directly to Postgres for `subscribe()`.
+
+Detect silently-broken subscribers via the `'connected'` event — register a listener and alert if no `'connected'` arrives within N seconds of `subscribe()` returning.
+
+### Standby / read-replica connections — unsupported
+
+`NOTIFY` is not replicated to streaming or logical replicas. A subscriber connected to a standby reads no events. After a primary failover, a subscriber connected by IP/DNS to the old primary (now a standby) will reconnect "cleanly" but receive nothing.
+
+**Recommended:** use `target_session_attrs=read-write` in the connection string (libpq ≥ 14 / pg ≥ 8.5) so the driver discovers the writable primary on every (re)connection.
+
+### `pg_notify` inside the capture trigger
+
+The capture trigger's `pg_notify` is enqueued and delivered on transaction commit. A pg-boss op that rolls back produces neither an audit row nor an event (both share the trigger savepoint).
+
+**Silent-gap edge case.** If `pg_notify` itself ever fails inside the trigger's `EXCEPTION WHEN OTHERS` block (vanishingly rare with the ~150-byte bounded payload), the implicit savepoint rolls back the audit row write too. The pg-boss op still succeeds. No JS `'error'` fires because no notification was delivered.
+
+### Channel name
+
+`pgbossier_job` — pg-bossier-owned per the namespacing constraint in issue #1. Non-Node consumers can `LISTEN pgbossier_job` directly.
