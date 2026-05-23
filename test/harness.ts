@@ -5,6 +5,7 @@ import pg from 'pg';
 export interface Harness {
   pool: pg.Pool;
   boss: PgBoss;
+  connectionString: string;
   teardown: () => Promise<void>;
 }
 
@@ -19,6 +20,7 @@ export async function startHarness(): Promise<Harness> {
   return {
     pool,
     boss,
+    connectionString,
     teardown: async () => {
       await pool.end();
       await boss.stop();
