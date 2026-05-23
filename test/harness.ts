@@ -5,6 +5,12 @@ import pg from 'pg';
 export interface Harness {
   pool: pg.Pool;
   boss: PgBoss;
+  /**
+   * The Postgres connection string used to create both `pool` and `boss`.
+   * Exposed so perf globalSetup can hand it to bench files via vitest's
+   * `provide()` (live `pool` / `boss` aren't serializable across workers).
+   */
+  connectionString: string;
   teardown: () => Promise<void>;
 }
 
@@ -19,6 +25,7 @@ export async function startHarness(): Promise<Harness> {
   return {
     pool,
     boss,
+    connectionString,
     teardown: async () => {
       await pool.end();
       await boss.stop();
