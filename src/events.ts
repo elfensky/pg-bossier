@@ -77,19 +77,76 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
   private client: PoolClient | null = null;
   private closed = false;
   private seenUnknownStates = new Set<string>();
+  private failureCount = 0;
+  private reconnectCancellers: (() => void)[] = [];
+  /** True only for the very first open() call — used to defer the 'connected' emit. */
+  private isFirstOpen = true;
 
   constructor(pool: Pool) {
     super();
     this.pool = pool;
   }
 
+  // Stable references for listener removal on release.
+  private readonly boundNotification = (msg: { channel: string; payload?: string }) => { this.handleNotification(msg); };
+  private readonly boundError = (err: unknown) => { this.onClientLost(err); };
+  private readonly boundEnd = () => { this.onClientLost(new Error('connection ended')); };
+
   async open(): Promise<void> {
     if (this.closed) return;
     this.client = await this.pool.connect();
-    this.client.on('notification', (msg) => this.handleNotification(msg));
+    this.client.on('notification', this.boundNotification);
+    this.client.on('error', this.boundError);
+    this.client.on('end', this.boundEnd);
     await this.client.query('LISTEN pgbossier_job');
-    // Emit on next I/O tick so callers can register listeners before it fires.
-    setImmediate(() => { if (!this.closed) this.emit('connected'); });
+    this.failureCount = 0;
+    if (this.isFirstOpen) {
+      this.isFirstOpen = false;
+      // Defer the initial 'connected' so callers can register listeners after subscribe() returns.
+      setImmediate(() => { if (!this.closed) this.emit('connected'); });
+    } else {
+      this.emit('connected');
+    }
+  }
+
+  private removeClientListeners(): void {
+    if (!this.client) return;
+    this.client.off('notification', this.boundNotification);
+    this.client.off('error', this.boundError);
+    this.client.off('end', this.boundEnd);
+  }
+
+  private onClientLost(err: unknown): void {
+    if (this.closed || !this.client) return;
+    this.removeClientListeners();
+    try { this.client.release(err instanceof Error ? err : new Error(String(err))); } catch { /* */ }
+    this.client = null;
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
+    if (this.closed) return;
+    const delayMs = this.computeBackoffMs();
+    const wait = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, delayMs);
+      this.reconnectCancellers.push(() => { clearTimeout(timer); resolve(); });
+    });
+    void wait.then(async () => {
+      if (this.closed) return;
+      try {
+        await this.open();
+        this.emitError('gap', new Error('event-stream gap during reconnect'));
+      } catch {
+        this.failureCount += 1;
+        this.scheduleReconnect();
+      }
+    });
+  }
+
+  private computeBackoffMs(): number {
+    const base = Math.min(1000 * Math.pow(2, this.failureCount), 30_000);
+    const jitter = 0.8 + Math.random() * 0.4;
+    return Math.round(base * jitter);
   }
 
   private emitError(reason: ErrorReason, error: unknown): void {
@@ -160,7 +217,12 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    for (const cancel of this.reconnectCancellers.slice()) {
+      try { cancel(); } catch { /* */ }
+    }
+    this.reconnectCancellers = [];
     if (this.client) {
+      this.removeClientListeners();
       try { await this.client.query('UNLISTEN pgbossier_job'); } catch { /* connection may be dead */ }
       this.client.release();
       this.client = null;

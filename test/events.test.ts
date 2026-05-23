@@ -183,3 +183,51 @@ test("malformed JSON fires 'error' (reason='parse'); stream continues", async ()
   expect(jobEventsAfter).toBeGreaterThan(0);
   await events.close();
 });
+
+test("reconnect after pg_terminate_backend; 'error' (gap) then 'connected'", async () => {
+  const events = await subscribe(h.pool);
+  const log: string[] = [];
+  events.on('connected', () => log.push('connected'));
+  events.on('error', (ev) => log.push(`error:${ev.reason}`));
+
+  // Find any backend with our LISTEN registered.
+  const { rows } = await h.pool.query<{ pid: number }>(
+    `SELECT pid FROM pg_stat_activity WHERE state = 'idle' AND query ILIKE '%LISTEN%pgbossier_job%'`,
+  );
+  expect(rows.length).toBeGreaterThan(0);
+  await h.pool.query(`SELECT pg_terminate_backend($1)`, [rows[0]!.pid]);
+
+  await new Promise((r) => setTimeout(r, 3000));
+
+  expect(log).toContain('connected');
+  expect(log).toContain('error:gap');
+  expect(log.filter((s) => s === 'connected').length).toBeGreaterThanOrEqual(2);
+
+  const queue = 'evt-reconnect';
+  await h.boss.createQueue(queue);
+  const got: string[] = [];
+  events.on('job', (e) => got.push(e.event));
+  await h.boss.send(queue, {});
+  await new Promise((r) => setTimeout(r, 200));
+  expect(got).toContain('created');
+
+  await events.close();
+}, 10_000);
+
+test('close() during backoff wait cancels reconnect', async () => {
+  const events = await subscribe(h.pool);
+
+  const { rows } = await h.pool.query<{ pid: number }>(
+    `SELECT pid FROM pg_stat_activity WHERE state = 'idle' AND query ILIKE '%LISTEN%pgbossier_job%'`,
+  );
+  await h.pool.query(`SELECT pg_terminate_backend($1)`, [rows[0]!.pid]);
+
+  // Close during the backoff wait.
+  await new Promise((r) => setTimeout(r, 50));
+  await events.close();
+
+  let secondConnected = false;
+  events.on('connected', () => { secondConnected = true; });
+  await new Promise((r) => setTimeout(r, 2000));
+  expect(secondConnected).toBe(false);
+}, 10_000);
