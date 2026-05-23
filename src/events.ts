@@ -63,6 +63,15 @@ export interface BossierEvents extends EventEmitter {
   [Symbol.asyncDispose](): Promise<void>;
 }
 
+const STATE_TO_EVENT: Record<string, JobEventName> = {
+  created:   'created',
+  active:    'started',
+  retry:     'retried',
+  completed: 'completed',
+  failed:    'failed',
+  cancelled: 'cancelled',
+};
+
 class BossierEventsImpl extends EventEmitter implements BossierEvents {
   private pool: Pool;
   private client: PoolClient | null = null;
@@ -76,9 +85,49 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
   async open(): Promise<void> {
     if (this.closed) return;
     this.client = await this.pool.connect();
+    this.client.on('notification', (msg) => this.handleNotification(msg));
     await this.client.query('LISTEN pgbossier_job');
     // Emit on next I/O tick so callers can register listeners before it fires.
     setImmediate(() => { if (!this.closed) this.emit('connected'); });
+  }
+
+  private handleNotification(msg: { channel: string; payload?: string }): void {
+    if (msg.channel !== 'pgbossier_job' || msg.payload === undefined) return;
+
+    let parsed: { job_id?: string; queue?: string; attempt?: number;
+                  state?: string; seq?: number | string; captured_at?: string };
+    try {
+      parsed = JSON.parse(msg.payload) as typeof parsed;
+    } catch {
+      // Task 7 wires this to 'error' with reason='parse'.
+      return;
+    }
+
+    const { job_id, queue, attempt, state, seq, captured_at } = parsed;
+    if (typeof job_id !== 'string' || typeof queue !== 'string' ||
+        typeof attempt !== 'number' || typeof state !== 'string' ||
+        (typeof seq !== 'number' && typeof seq !== 'string') ||
+        typeof captured_at !== 'string') {
+      return;
+    }
+
+    const eventName = STATE_TO_EVENT[state];
+    const jobEvent: JobEvent = {
+      event: eventName ?? state,
+      jobId: job_id,
+      queue,
+      attempt,
+      state,
+      seq: BigInt(seq),
+      capturedAt: new Date(captured_at),
+    };
+
+    if (eventName) {
+      this.emit(eventName, jobEvent);   // per-type first
+    } else {
+      // Unknown state — Task 7 wires the 'warning' event.
+    }
+    this.emit('job', jobEvent);          // then catch-all
   }
 
   async close(): Promise<void> {
