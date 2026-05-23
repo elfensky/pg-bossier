@@ -315,6 +315,22 @@ test('reconnect handles idle_session_timeout disconnect', async () => {
   await timeoutPool.end();
 }, 15_000);
 
+test('subscriber receives every event during a burst (notification flood)', async () => {
+  const events = await subscribe(h.pool);
+  let received = 0;
+  events.on('created', () => { received += 1; });
+
+  const queue = 'evt-flood';
+  await h.boss.createQueue(queue);
+  const N = 200;
+  const sends: Promise<string | null>[] = [];
+  for (let i = 0; i < N; i++) sends.push(h.boss.send(queue, { i }));
+  await Promise.all(sends);
+  await new Promise((r) => setTimeout(r, 1500));
+  expect(received).toBe(N);
+  await events.close();
+}, 30_000);
+
 test('src/events.ts imports only from pg and node built-ins', () => {
   const source = readFileSync(resolve(__dirname, '../src/events.ts'), 'utf8');
   const importRe = /from\s+['"]([^'"]+)['"]/g;
