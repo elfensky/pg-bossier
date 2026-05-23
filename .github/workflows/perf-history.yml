@@ -1,0 +1,130 @@
+# perf-history — issue #23.
+# Runs the vitest perf bench on every push to develop, then appends a
+# record to perf-metrics.jsonl on the orphan `metrics` branch.
+#
+# Concurrency: serialized via `concurrency` with `cancel-in-progress: false`
+# so back-to-back develop merges don't drop baselines. The push step does
+# a `git fetch + rebase + push` retry loop because GitHub Actions doesn't
+# guarantee FIFO ordering on a pending queue.
+#
+# Permissions: contents:write — needs to push to the metrics branch.
+# Fork-PR safety isn't a concern here because the workflow only triggers
+# on `push: develop`, which only base-branch maintainers can perform.
+name: perf-history
+
+on:
+  push:
+    branches: [develop]
+
+# Serialize pushes to the metrics branch. The group key embeds the workflow name so
+# this concurrency lane is dedicated to perf history and doesn't collide
+# with other workflows.
+concurrency:
+  group: ${{ github.workflow }}-metrics
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bench-and-record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Run perf bench (writes perf-output.json)
+        run: npm run test:perf
+
+      - name: Stage perf-output for the writer step
+        run: |
+          set -euo pipefail
+          if [ ! -f perf-output.json ]; then
+            echo "::error::perf-output.json was not produced by the bench — vitest config or bench file may be broken"
+            exit 1
+          fi
+          # Copy into a tmp path that survives the next checkout
+          mkdir -p "${RUNNER_TEMP}/perf"
+          cp perf-output.json "${RUNNER_TEMP}/perf/perf-output.json"
+          cp package.json    "${RUNNER_TEMP}/perf/package.json"
+          cp package-lock.json "${RUNNER_TEMP}/perf/package-lock.json"
+          cp scripts/perf-write.mjs   "${RUNNER_TEMP}/perf/perf-write.mjs"
+          cp scripts/perf-methods.mjs "${RUNNER_TEMP}/perf/perf-methods.mjs"
+
+      - name: Append to metrics branch with fetch+rebase+retry
+        env:
+          PB_GITHUB_SHA: ${{ github.sha }}
+          PB_GITHUB_REF_NAME: ${{ github.ref_name }}
+          PB_GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Switch to the metrics orphan branch — assumed to exist;
+          # one-time init: see docs/metrics-init.md.
+          git fetch origin metrics
+          git checkout metrics
+
+          # Restore the staged perf-output + scripts (the checkout above
+          # nuked develop's tree).
+          mkdir -p scripts
+          cp "${RUNNER_TEMP}/perf/perf-output.json"   ./perf-output.json
+          cp "${RUNNER_TEMP}/perf/package.json"       ./package.json
+          cp "${RUNNER_TEMP}/perf/package-lock.json"  ./package-lock.json
+          cp "${RUNNER_TEMP}/perf/perf-write.mjs"     ./scripts/perf-write.mjs
+          cp "${RUNNER_TEMP}/perf/perf-methods.mjs"   ./scripts/perf-methods.mjs
+
+          # Expose to the node script under the names it reads.
+          export GITHUB_SHA="$PB_GITHUB_SHA"
+          export GITHUB_REF_NAME="$PB_GITHUB_REF_NAME"
+          export GITHUB_EVENT_NAME="$PB_GITHUB_EVENT_NAME"
+
+          node scripts/perf-write.mjs perf-output.json perf-metrics.jsonl
+
+          # Clean up the transient files so we only commit the JSONL.
+          rm -f perf-output.json package.json package-lock.json
+          rm -rf scripts
+
+          git add perf-metrics.jsonl
+          if git diff --cached --quiet; then
+            echo "No changes to perf-metrics.jsonl — skipping commit."
+            exit 0
+          fi
+          SHORT_SHA="${PB_GITHUB_SHA:0:7}"
+          git commit -m "perf(metrics): record from ${SHORT_SHA}" \
+                     -m "trigger: ${PB_GITHUB_EVENT_NAME} on ${PB_GITHUB_REF_NAME}"
+
+          # Push with retry — handles the rare race where another
+          # serialized job updated the metrics branch between our fetch and
+          # push. Counts retries (not total attempts): initial push +
+          # up to 2 rebase-retries = 3 total push tries. Given the
+          # workflow concurrency.group queues runs, at most one genuine
+          # concurrent writer is possible, so 3 is overkill but cheap.
+          attempt=0
+          until git push origin metrics; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::push to metrics branch failed after $attempt retries"
+              exit 1
+            fi
+            echo "Push failed (retry $attempt) — rebasing on origin/metrics and retrying"
+            git fetch origin metrics
+            git rebase origin/metrics || {
+              echo "::error::rebase failed — aborting"
+              exit 1
+            }
+          done

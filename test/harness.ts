@@ -5,12 +5,17 @@ import pg from 'pg';
 export interface Harness {
   pool: pg.Pool;
   boss: PgBoss;
+  /**
+   * The Postgres connection string used to create both `pool` and `boss`.
+   * Exposed so perf globalSetup can hand it to bench files via vitest's
+   * `provide()` (live `pool` / `boss` aren't serializable across workers).
+   */
   connectionString: string;
   teardown: () => Promise<void>;
 }
 
 export async function startHarness(): Promise<Harness> {
-  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:16').start();
+  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:18').start();
   const connectionString = container.getConnectionUri();
   // supervise/schedule off: otherwise pg-boss's maintenance and cron loops insert
   // jobs mid-test, the capture trigger mirrors them, and count(*) assertions flake.

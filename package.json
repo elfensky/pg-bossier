@@ -45,7 +45,7 @@
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
         "test": "vitest run",
-        "test:perf": "vitest run --config vitest.perf.config.ts"
+        "test:perf": "vitest bench --config vitest.perf.config.ts --run"
     },
     "peerDependencies": {
         "pg-boss": "^12.18.2",
