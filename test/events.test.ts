@@ -331,6 +331,27 @@ test('subscriber receives every event during a burst (notification flood)', asyn
   await events.close();
 }, 30_000);
 
+test('performance probe: per-transition overhead with pg-bossier', async () => {
+  const queue = 'evt-perf';
+  await h.boss.createQueue(queue);
+
+  const N = 100;
+  const start = process.hrtime.bigint();
+  for (let i = 0; i < N; i++) {
+    const id = await h.boss.send(queue, { i });
+    await h.boss.fetch(queue);
+    await h.boss.complete(queue, id!, { ok: true });
+  }
+  const elapsedNs = process.hrtime.bigint() - start;
+  const perTransitionMs = Number(elapsedNs) / 1_000_000 / (N * 3);
+
+  // Informational until issue #12 lands a budget.
+  console.log(`[perf] per-transition with pg-bossier: ${perTransitionMs.toFixed(3)} ms`);
+
+  // Sanity ceiling — well under 100 ms on slow CI.
+  expect(perTransitionMs).toBeLessThan(100);
+}, 60_000);
+
 test('src/events.ts imports only from pg and node built-ins', () => {
   const source = readFileSync(resolve(__dirname, '../src/events.ts'), 'utf8');
   const importRe = /from\s+['"]([^'"]+)['"]/g;
