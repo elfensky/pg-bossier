@@ -123,26 +123,35 @@ async function populateLifecycle(boss: Harness['boss'], n: number): Promise<stri
 }
 
 describe('Perf — chronicle scale (1k jobs)', () => {
-  let phase2: Harness | null = null;
+  let env: Harness | null = null;
   let knownJobId: string;
   const bench = new BenchHarness();
 
   beforeAll(async () => {
-    // -------- Phase 1: baseline populate, no pg-bossier installed --------
-    const h1 = await startHarness();
-    const t0p1 = performance.now();
-    await populateLifecycle(h1.boss, N_JOBS);
-    const tBaseline = performance.now() - t0p1;
-    await h1.teardown();
-
-    // -------- Phase 2: populate with pg-bossier installed --------
-    // Wrap setup in try/catch so an install or populate failure does not leak
-    // the testcontainer — afterAll only runs if beforeAll completes.
-    phase2 = await startHarness();
+    // Single warm container for both phases. Empirically, two cold containers
+    // produce a confounded trigger-overhead measurement: Docker startup,
+    // Postgres filesystem cache, and V8 JIT differ between cold runs in ways
+    // that swamp the trigger's per-state-change cost (the original two-cold
+    // design measured negative overhead because the second populate benefited
+    // from warm caches the first didn't have). One container with TRUNCATE
+    // between phases keeps everything but the install status of pg-bossier
+    // identical — the only variable that should drive the timing delta.
+    env = await startHarness();
     try {
-      await install(phase2.pool);
+      // -------- Phase 1: baseline populate, no pg-bossier installed --------
+      const t0p1 = performance.now();
+      await populateLifecycle(env.boss, N_JOBS);
+      const tBaseline = performance.now() - t0p1;
+
+      // Reset between phases — drop the jobs but keep pgboss.queue config and
+      // the warm Postgres process. CASCADE clears any partitions on the
+      // partitioned pgboss.job table.
+      await env.pool.query('TRUNCATE pgboss.job CASCADE');
+
+      // -------- Phase 2: populate with pg-bossier installed --------
+      await install(env.pool);
       const t0p2 = performance.now();
-      const jobIds = await populateLifecycle(phase2.boss, N_JOBS);
+      const jobIds = await populateLifecycle(env.boss, N_JOBS);
       const tWithTrigger = performance.now() - t0p2;
 
       bench.recordTriggerOverhead({
@@ -158,13 +167,13 @@ describe('Perf — chronicle scale (1k jobs)', () => {
       knownJobId = jobIds[Math.floor(jobIds.length / 2)]!;
     } catch (err) {
       // Tear down the leaked container, then rethrow so the test fails loudly.
-      await phase2.teardown();
-      phase2 = null;
+      await env.teardown();
+      env = null;
       throw err;
     }
 
     // -------- Phase 3: query measurements against the populated chronicle --------
-    const client = bossier({ boss: phase2.boss, pool: phase2.pool });
+    const client = bossier({ boss: env.boss, pool: env.pool });
     await bench.sampleMethod('findById(known)',                SAMPLES_PER_METHOD, () => client.findById(knownJobId));
     await bench.sampleMethod('findById(unknown)',              SAMPLES_PER_METHOD, () => client.findById(randomUUID()));
     await bench.sampleMethod('getRetryHistory(known)',         SAMPLES_PER_METHOD, () => client.getRetryHistory(knownJobId));
@@ -180,7 +189,7 @@ describe('Perf — chronicle scale (1k jobs)', () => {
   }, PERF_TIMEOUT_MS);
 
   afterAll(async () => {
-    if (phase2) await phase2.teardown();
+    if (env) await env.teardown();
   });
 
   it('captured 10 query measurements (trigger overhead is a separate scalar)', () => {
