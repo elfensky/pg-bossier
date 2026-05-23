@@ -193,22 +193,25 @@ without silently swallowing transitions or crashing the consumer.
 
 ### `attempt` semantics per event type
 
-Verified against pg-boss 12.18.2's observed behavior (see `test/capture.test.ts`).
-pg-boss's `failed` state is the **terminal** failure marker (no retries
-remaining); `retry` is a transitional state on the OLD attempt's row
-meaning "this attempt failed and a retry has been scheduled." After the
-trigger fires for the `retry` state on the old row, pg-boss INSERTs a
-new row for the next attempt with `state = 'created'`.
+Verified against pg-boss 12.18.2's observed behavior (see `test/capture.test.ts`
+and `node_modules/pg-boss/dist/plans.js`). pg-boss's `failed` state is the
+**terminal** failure marker (no retries remaining); `retry` is a transitional
+state on the OLD attempt's row meaning "this attempt failed and a retry has
+been scheduled." When the retry is fetched, pg-boss's `fetchNextJob`
+performs a single `UPDATE` that bumps `retry_count` and sets `state = 'active'`
+in one atomic statement — **no intervening `created` event fires for the
+retry attempt's row.** The retry row goes directly from `retry(N) → active(N+1)`
+from the trigger's perspective.
 
-- **`created`** — fires when a new attempt row is inserted. `attempt`: the new attempt's number. `0` for the first attempt of a freshly-sent job; `1` for the first retry; etc.
+- **`created`** — fires only when a fresh job is sent (the row is INSERTed with `state = 'created'`). `attempt: 0`. Retries do NOT produce a `created` event.
 - **`started`** — fires when an attempt is fetched (`active`). `attempt`: the attempt that just started.
 - **`completed`** — fires on terminal `completed`. `attempt`: the attempt that succeeded.
 - **`failed`** — fires on **terminal** `failed` (retries exhausted). `attempt`: the attempt that failed terminally.
 - **`cancelled`** — fires on terminal `cancelled`. `attempt`: the attempt active at cancellation.
-- **`retried`** — fires when an attempt fails but a retry is still budgeted (pg-boss flips the OLD attempt row to `state = 'retry'`). `attempt`: the attempt that just failed (the OLD attempt). It is immediately followed by a `created` event for the new attempt row pg-boss inserts.
+- **`retried`** — fires when an attempt fails but a retry is still budgeted (pg-boss flips the OLD attempt row to `state = 'retry'`). `attempt`: the attempt that just failed (the OLD attempt). The next `started` event for the same job carries the new attempt number.
 
-For a job that fails once and then succeeds (retryLimit = 1), the consumer sees:
-`created(0)` → `started(0)` → `retried(0)` → `created(1)` → `started(1)` → `completed(1)`.
+For a job that fails once and then succeeds (retryLimit = 1), the consumer sees five events:
+`created(0)` → `started(0)` → `retried(0)` → `started(1)` → `completed(1)`.
 
 For a job with no retries that fails (retryLimit = 0):
 `created(0)` → `started(0)` → `failed(0)`.
