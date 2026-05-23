@@ -101,3 +101,70 @@ test('install adds seq column to a pre-existing v1 pgbossier.record (upgrade pat
     expect(rows[0]!.seq).toMatch(/^\d+$/);
   } finally { await h.teardown(); }
 });
+
+test('install with custom schema names parameterizes trigger and channel', async () => {
+  const h = await startHarness();
+  try {
+    // Set up an alternate pg-boss schema (so trigger has a target)
+    await h.pool.query(`CREATE SCHEMA IF NOT EXISTS altpgboss`);
+    // Bootstrap pg-boss into the alt schema by mimicking what boss.start does:
+    // for the test, just create the minimum pgboss.job-like table.
+    await h.pool.query(`
+      CREATE TABLE IF NOT EXISTS altpgboss.job (
+        id uuid PRIMARY KEY, name text NOT NULL, retry_count integer NOT NULL DEFAULT 0,
+        state text NOT NULL, data jsonb, output jsonb,
+        created_on timestamptz, started_on timestamptz, completed_on timestamptz
+      );
+    `);
+
+    await install(h.pool, { schema: 'altbossier', pgbossSchema: 'altpgboss' });
+
+    // Verify the alt schema + objects exist
+    const { rows: schemaRows } = await h.pool.query(
+      `SELECT 1 FROM information_schema.schemata WHERE schema_name = 'altbossier'`,
+    );
+    expect(schemaRows).toHaveLength(1);
+
+    // Verify the trigger name is schema-scoped (altbossier_capture, NOT pgbossier_capture)
+    const { rows: triggerRows } = await h.pool.query<{ tgname: string }>(
+      `SELECT tgname FROM pg_trigger WHERE tgrelid = 'altpgboss.job'::regclass AND tgname LIKE '%_capture'`,
+    );
+    expect(triggerRows).toHaveLength(1);
+    expect(triggerRows[0]!.tgname).toBe('altbossier_capture');
+  } finally { await h.teardown(); }
+});
+
+test('install rejects schema:"public" before any SQL runs (data-loss prevention)', async () => {
+  const h = await startHarness();
+  try {
+    await expect(install(h.pool, { schema: 'public' })).rejects.toThrow(/reserved/);
+    // Verify NO schema was created (no SQL ran)
+    const { rows } = await h.pool.query(
+      `SELECT 1 FROM information_schema.schemata WHERE schema_name = 'pgbossier'`,
+    );
+    expect(rows).toHaveLength(0);
+  } finally { await h.teardown(); }
+});
+
+test('two installs with different pgbossier schemas keep distinct triggers', async () => {
+  const h = await startHarness();
+  try {
+    await install(h.pool); // default 'pgbossier'
+
+    // Verify install A's trigger exists
+    let trig = await h.pool.query<{ tgname: string }>(
+      `SELECT tgname FROM pg_trigger WHERE tgrelid = 'pgboss.job'::regclass AND tgname = 'pgbossier_capture'`,
+    );
+    expect(trig.rows).toHaveLength(1);
+
+    await install(h.pool, { schema: 'altbossier' });
+
+    // After install B, both triggers should exist on pgboss.job
+    trig = await h.pool.query<{ tgname: string }>(
+      `SELECT tgname FROM pg_trigger WHERE tgrelid = 'pgboss.job'::regclass AND tgname IN ('pgbossier_capture', 'altbossier_capture')`,
+    );
+    expect(trig.rows).toHaveLength(2);
+    // Install A's trigger MUST still exist (regression test for the v1 collision bug)
+    expect(trig.rows.map(r => r.tgname).sort()).toEqual(['altbossier_capture', 'pgbossier_capture']);
+  } finally { await h.teardown(); }
+});
