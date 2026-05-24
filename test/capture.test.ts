@@ -1,7 +1,11 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
+import { recordTerminalDetail } from '../src/terminal-detail.js';
+import { resolveSchemas } from '../src/sql.js';
 import pg from 'pg';
+
+const SCHEMAS = resolveSchemas();
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -145,4 +149,74 @@ test('trigger publishes pg_notify on pgbossier_job with identity + seq', async (
     expect(typeof ev.parsed.captured_at).toBe('string');
   }
   await listener.end();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Goal 2 regression — terminal_detail preservation across trigger fires.
+//
+// Section C of the Goal 2 spec depends on the capture trigger's
+// `ON CONFLICT DO UPDATE SET` list NOT including `terminal_detail`. The reader
+// "trusts the writer" (recordTerminalDetail is the sole writer). If a future
+// trigger change adds terminal_detail to the SET list, a subsequent pg-boss
+// state UPDATE would silently overwrite the worker's classification with NULL.
+// These tests lock that structural guarantee in.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('capture trigger preserves terminal_detail across subsequent fires', async () => {
+  const queue = 'cap-td-preserve';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 0 });
+
+  // Drive the row to a state recordTerminalDetail can write against.
+  await h.boss.fetch(queue);
+  await h.boss.fail(queue, jobId!, { err: 'boom' });
+  let rows = await getRecords(h.pool, jobId!);
+  expect(rows[0]!.state).toBe('failed');
+  expect(rows[0]!.terminal_detail).toBeNull();
+
+  // Worker writes the typed classification.
+  await recordTerminalDetail(h.pool, SCHEMAS, jobId!, 0, {
+    state: 'failed',
+    detail: { class: 'transient', message: 'boom' },
+  });
+
+  rows = await getRecords(h.pool, jobId!);
+  const before = rows[0]!.terminal_detail;
+  expect(before).toEqual({ class: 'transient', message: 'boom' });
+
+  // Induce another capture trigger fire on the same (job_id, attempt) row.
+  // The trigger fires AFTER INSERT OR UPDATE OF state — a no-op UPDATE that
+  // mentions the state column in its SET list still fires the trigger, and
+  // exercises the ON CONFLICT DO UPDATE path inside the trigger function.
+  // We touch pgboss.job directly so we are not coupled to any specific
+  // pg-boss transition path.
+  await h.pool.query(
+    `UPDATE ${SCHEMAS.pgboss}.job SET state = state WHERE id = $1`,
+    [jobId],
+  );
+
+  rows = await getRecords(h.pool, jobId!);
+  const after = rows[0]!.terminal_detail;
+  expect(after).toEqual(before);
+});
+
+test('capture trigger DO UPDATE SET clause does not list terminal_detail', async () => {
+  // Static check on the trigger function definition. If the SET list ever
+  // grows a terminal_detail line, this fails at install time, before any
+  // row-level test would catch it.
+  const { rows } = await h.pool.query<{ def: string }>(
+    `SELECT pg_get_functiondef(p.oid) AS def
+     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = $1 AND p.proname = 'capture'`,
+    [SCHEMAS.pgbossier],
+  );
+  expect(rows[0]).toBeDefined();
+  const def = rows[0]!.def;
+
+  // Isolate the DO UPDATE SET block — from `DO UPDATE SET` up to the
+  // semicolon that ends the INSERT statement — and assert terminal_detail
+  // is not in it.
+  const setBlockMatch = /DO UPDATE SET[\s\S]*?;/i.exec(def);
+  expect(setBlockMatch).not.toBeNull();
+  expect(setBlockMatch![0]).not.toMatch(/terminal_detail/i);
 });
