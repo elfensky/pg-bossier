@@ -210,3 +210,48 @@ test('input snapshots are preserved per-attempt across pg-boss DELETE+INSERT ret
     { phase: 'one', source: 'second' },
   ]);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 13 — GIN index on input_snapshot exists after install.
+// ─────────────────────────────────────────────────────────────────────────────
+test('GIN index on input_snapshot is created by install', async () => {
+  const { rows } = await h.pool.query<{ indexname: string }>(
+    `SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND tablename = 'record' AND indexname = 'record_input_snapshot_gin'`,
+    [SCHEMAS.pgbossier],
+  );
+  expect(rows.length).toBe(1);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 14 — GIN index is used for containment query.
+// Forces enable_seqscan = off because at test-suite scale the planner picks
+// a seq scan over the small table even though the GIN index is present.
+// (Mirrors the pattern used in test/dead-letter.test.ts Test 11.)
+// ─────────────────────────────────────────────────────────────────────────────
+test('GIN index is used for input_snapshot containment query', async () => {
+  // Populate a few rows so the planner has something to scan.
+  const queue = 'is-gin-explain';
+  await h.boss.createQueue(queue);
+  for (let i = 0; i < 3; i++) {
+    const jobId = await h.boss.send(queue, {});
+    await recordInputSnapshot(h.pool, SCHEMAS, jobId!, 0, { kind: 'foo', i });
+  }
+
+  const client = await h.pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL enable_seqscan = off');
+    const { rows } = await client.query<{ 'QUERY PLAN': string }>(
+      `EXPLAIN (FORMAT TEXT)
+       SELECT job_id FROM ${SCHEMAS.pgbossier}.record
+       WHERE input_snapshot @> $1::jsonb
+       LIMIT 1`,
+      [JSON.stringify({ kind: 'foo' })],
+    );
+    await client.query('ROLLBACK');
+    const plan = rows.map((r) => r['QUERY PLAN']).join('\n');
+    expect(plan).toMatch(/record_input_snapshot_gin/i);
+  } finally {
+    client.release();
+  }
+});

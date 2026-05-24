@@ -110,6 +110,7 @@ export function recordIndexesSql(s: SchemaNames): readonly string[] {
     `CREATE INDEX IF NOT EXISTS record_data_gin            ON ${t} USING gin (data);`,
     `CREATE INDEX IF NOT EXISTS record_output_gin          ON ${t} USING gin (output);`,
     `CREATE INDEX IF NOT EXISTS record_terminal_detail_gin ON ${t} USING gin (terminal_detail);`,
+    `CREATE INDEX IF NOT EXISTS record_input_snapshot_gin  ON ${t} USING gin (input_snapshot);`,
     `CREATE INDEX IF NOT EXISTS record_active_idx          ON ${t} (queue, started_on) WHERE state = 'active';`,
   ];
 }
