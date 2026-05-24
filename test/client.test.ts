@@ -1,4 +1,5 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { PgBoss } from 'pg-boss';
 import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
@@ -11,6 +12,7 @@ afterAll(async () => { await h.teardown(); });
 /** The pg-bossier methods we add on top of pg-boss's API. */
 const BOSSIER_METHOD_NAMES = [
   'recordPatch', 'recordTerminalDetail',
+  'recordDeadLetter', 'findDeadLetterSource', 'findDeadLetterTarget',
   'findById', 'getRetryHistory', 'listJobs',
   'latestPerQueue', 'countByState', 'countByQueue', 'listLongRunning',
   'setProgress', 'getProgress',
@@ -173,4 +175,34 @@ test('bossier.getEventsSince() returns rows after the cursor', async () => {
   const jobId = await h.boss.send(queue, {});
   const evts = await client.getEventsSince(cursor);
   expect(evts.some((e) => e.jobId === jobId)).toBe(true);
+});
+
+test('client.recordDeadLetter + findDeadLetterSource via the proxy', async () => {
+  const queue = 'client-dlq';
+  await h.boss.createQueue(queue);
+  const sourceId = await h.boss.send(queue, {}, { retryLimit: 0 });
+  await h.boss.fetch(queue);                                // created -> active
+  await h.boss.fail(queue, sourceId!, { err: 'terminal' }); // active  -> failed
+
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  const dlqJobId = randomUUID();
+  await client.recordDeadLetter({ sourceJobId: sourceId!, dlqJobId });
+
+  const found = await client.findDeadLetterSource(dlqJobId);
+  expect(found).toEqual({ jobId: sourceId, attempt: 0, queue });
+});
+
+test('client.findDeadLetterTarget via the proxy', async () => {
+  const queue = 'client-dlq-forward';
+  await h.boss.createQueue(queue);
+  const sourceId = await h.boss.send(queue, {}, { retryLimit: 0 });
+  await h.boss.fetch(queue);
+  await h.boss.fail(queue, sourceId!, { err: 'terminal' });
+
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  const dlqJobId = randomUUID();
+  await client.recordDeadLetter({ sourceJobId: sourceId!, dlqJobId });
+
+  const target = await client.findDeadLetterTarget(sourceId!);
+  expect(target).toEqual({ dlqJobId, attempt: 0 });
 });

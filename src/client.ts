@@ -2,10 +2,12 @@ import type { PgBoss } from 'pg-boss';
 import type { Pool } from 'pg';
 import { recordPatch, type RecordPatch } from './record.js';
 import { recordTerminalDetail, type TerminalDetail } from './terminal-detail.js';
+import { recordDeadLetter, type RecordDeadLetterArgs } from './dead-letter.js';
 import { setProgress, getProgress, type ProgressResult } from './progress.js';
 import {
   findById, getRetryHistory, listJobs, latestPerQueue,
   countByState, countByQueue, listLongRunning, getEventsSince,
+  findDeadLetterSource, findDeadLetterTarget,
   type JobRecord, type JobState, type JobFilter, type ListJobsOpts,
   type GetEventsSinceOpts,
 } from './read.js';
@@ -39,6 +41,27 @@ export interface BossierMethods {
   recordTerminalDetail: (
     jobId: string, attempt: number, payload: TerminalDetail,
   ) => Promise<void>;
+  /**
+   * Record a source → DLQ lineage link on the source job's most-recent
+   * `failed` chronicle row. Writes `terminal_detail.deadLetteredAs = dlqJobId`
+   * via a conflict-aware JSONB merge. Fail-open: missing source row,
+   * conflicting prior link, or DB errors all warn and no-op.
+   */
+  recordDeadLetter: (args: RecordDeadLetterArgs) => Promise<void>;
+  /**
+   * Reverse lineage lookup: given a DLQ job's id, find the source attempt that
+   * linked to it. `null` when no source row carries that link.
+   */
+  findDeadLetterSource: (
+    dlqJobId: string,
+  ) => Promise<{ jobId: string; attempt: number; queue: string } | null>;
+  /**
+   * Forward lineage lookup: given a source job's id, find the DLQ job it was
+   * dead-lettered to. `null` when no failed attempt carries that link.
+   */
+  findDeadLetterTarget: (
+    sourceJobId: string,
+  ) => Promise<{ dlqJobId: string; attempt: number } | null>;
   /** A job's latest attempt, across all queues. `null` if never captured. */
   findById: <TInput = unknown, TOutput = unknown>(
     jobId: string,
@@ -106,6 +129,9 @@ export function bossier(options: BossierOptions): Bossier {
     recordPatch: (jobId, attempt, patch) => recordPatch(pool, s, jobId, attempt, patch),
     recordTerminalDetail: (jobId, attempt, payload) =>
       recordTerminalDetail(pool, s, jobId, attempt, payload),
+    recordDeadLetter: (args) => recordDeadLetter(pool, s, args),
+    findDeadLetterSource: (dlqJobId) => findDeadLetterSource(pool, s, dlqJobId),
+    findDeadLetterTarget: (sourceJobId) => findDeadLetterTarget(pool, s, sourceJobId),
     findById: <TInput = unknown, TOutput = unknown>(jobId: string) =>
       findById<TInput, TOutput>(pool, s, jobId),
     getRetryHistory: <TInput = unknown, TOutput = unknown>(jobId: string) =>
