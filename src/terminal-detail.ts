@@ -97,7 +97,7 @@ export async function recordTerminalDetail(
   const states = allowedStates(payload.state);
   await pool.query(
     `UPDATE ${schemas.pgbossier}.record
-        SET terminal_detail = $4::jsonb
+        SET terminal_detail = COALESCE(terminal_detail, '{}'::jsonb) || $4::jsonb
       WHERE job_id = $1
         AND attempt = $2
         AND state = ANY($3::text[])`,
