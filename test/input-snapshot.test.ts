@@ -5,6 +5,7 @@ import { install } from '../src/install.js';
 import { recordInputSnapshot, getInputSnapshot } from '../src/input-snapshot.js';
 import { getRetryHistory } from '../src/read.js';
 import { resolveSchemas } from '../src/sql.js';
+import { bossier } from '../src/client.js';
 
 const SCHEMAS = resolveSchemas();
 
@@ -228,6 +229,37 @@ test('GIN index on input_snapshot is created by install', async () => {
 // a seq scan over the small table even though the GIN index is present.
 // (Mirrors the pattern used in test/dead-letter.test.ts Test 11.)
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 15 — Compile-time generic narrowing fixture for the bossier proxy.
+// Not exercised at runtime — this exists so `tsc` verifies the overload's
+// return-type inference at call sites. If the overload regresses (e.g. the
+// "without attempt" branch starts returning `T | null`), this file fails to
+// type-check.
+// ─────────────────────────────────────────────────────────────────────────────
+function _narrowingFixture(client: ReturnType<typeof bossier>): void {
+  void (async () => {
+    // Explicit attempt: T | null
+    const a = await client.getInputSnapshot<{ x: number }>(
+      '00000000-0000-0000-0000-000000000000', 0,
+    );
+    if (a) {
+      const _x: number = a.x;
+      void _x;
+    }
+    // Omitted attempt: InputSnapshotResult<T> | null
+    const b = await client.getInputSnapshot<{ x: number }>(
+      '00000000-0000-0000-0000-000000000000',
+    );
+    if (b) {
+      const _x: number = b.snapshot.x;
+      const _att: number = b.attempt;
+      void _x;
+      void _att;
+    }
+  });
+}
+void _narrowingFixture;
+
 test('GIN index is used for input_snapshot containment query', async () => {
   // Populate a few rows so the planner has something to scan.
   const queue = 'is-gin-explain';
