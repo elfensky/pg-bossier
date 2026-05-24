@@ -37,6 +37,10 @@ pg-boss 12 has **no `pgboss.archive` table**; finished job rows are deleted in p
 
 pg-bossier reaches into none of these.
 
+## Per-goal surface scope
+
+- **Goal 3 adds no new pg-boss surface.** The writer (`recordDeadLetter`) and readers (`findDeadLetterSource` / `findDeadLetterTarget`) read and write only `pgbossier.record`. (Future trigger-based DLQ detection would read `pgboss.queue.dead_letter`, but the trigger is not modified.)
+
 ## How this doc gets updated
 
 This document is a ledger of real pg-boss surfaces pg-bossier currently

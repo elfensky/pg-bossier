@@ -9,6 +9,7 @@ export type {
   TerminalDetailCancelled,
   TerminalDetailFailed,
 } from './terminal-detail.js';
+export type { RecordDeadLetterArgs } from './dead-letter.js';
 export type { ProgressResult } from './progress.js';
 export type { JobRecord, JobState, JobFilter, ListJobsOpts, GetEventsSinceOpts } from './read.js';
 export { subscribe } from './events.js';

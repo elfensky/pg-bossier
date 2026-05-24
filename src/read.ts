@@ -355,6 +355,54 @@ export async function getEventsSince<TInput = unknown, TOutput = unknown>(
   return rows.map(mapRecord<TInput, TOutput>);
 }
 
+/**
+ * Reverse lineage lookup: given a DLQ job's id, find the source attempt that
+ * linked to it via `terminal_detail.deadLetteredAs`. Returns `null` when no
+ * source row carries that link.
+ *
+ * The `@>` containment probe is GIN-index-eligible against
+ * `record_terminal_detail_gin` (see `src/sql.ts`).
+ */
+export async function findDeadLetterSource(
+  pool: Pool,
+  schemas: SchemaNames,
+  dlqJobId: string,
+): Promise<{ jobId: string; attempt: number; queue: string } | null> {
+  const { rows } = await pool.query<{ jobId: string; attempt: number; queue: string }>(
+    `SELECT job_id AS "jobId", attempt, queue
+       FROM ${schemas.pgbossier}.record
+      WHERE terminal_detail @> jsonb_build_object('deadLetteredAs', $1::text)
+      ORDER BY captured_at DESC
+      LIMIT 1`,
+    [dlqJobId],
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Forward lineage lookup: given a source job's id, find the DLQ job it was
+ * dead-lettered to. Reads the latest `failed` attempt's
+ * `terminal_detail.deadLetteredAs`. Returns `null` when no failed attempt
+ * carries that link.
+ */
+export async function findDeadLetterTarget(
+  pool: Pool,
+  schemas: SchemaNames,
+  sourceJobId: string,
+): Promise<{ dlqJobId: string; attempt: number } | null> {
+  const { rows } = await pool.query<{ dlqJobId: string; attempt: number }>(
+    `SELECT terminal_detail->>'deadLetteredAs' AS "dlqJobId", attempt
+       FROM ${schemas.pgbossier}.record
+      WHERE job_id = $1
+        AND state = 'failed'
+        AND terminal_detail ? 'deadLetteredAs'
+      ORDER BY attempt DESC
+      LIMIT 1`,
+    [sourceJobId],
+  );
+  return rows[0] ?? null;
+}
+
 /** Filtered, paginated job list over the current view, with an exact total. */
 export async function listJobs<TInput = unknown, TOutput = unknown>(
   pool: Pool,

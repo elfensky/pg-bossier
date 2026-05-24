@@ -239,9 +239,9 @@ test('late recordTerminalDetail writes to attempt 0 while row is in retry state'
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test 8 — Concurrent calls — last-writer-wins.
+// Test 8 — Sequential calls — key-level merge, last-writer-wins per key.
 // ─────────────────────────────────────────────────────────────────────────────
-test('sequential calls overwrite — last-writer-wins', async () => {
+test('sequential calls merge at key level — last-writer-wins on overlapping keys', async () => {
   const queue = 'td-last-writer-wins';
   await h.boss.createQueue(queue);
   const jobId = await h.boss.send(queue, {});
@@ -257,10 +257,39 @@ test('sequential calls overwrite — last-writer-wins', async () => {
     detail: { class: 'non_retryable', message: 'second' },
   });
 
+  // Both calls write the same keys (class + message); the second call's values
+  // win at each key. Use toEqual (not toMatchObject) to lock the exact shape —
+  // the merge writer must not leave stray keys behind.
   const job = await findById(h.pool, SCHEMAS, jobId!);
-  expect(job!.terminalDetail).toMatchObject({
+  expect(job!.terminalDetail).toEqual({
     class: 'non_retryable',
     message: 'second',
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 8b — Non-overlapping keys: prior call's keys survive (key-level merge).
+// ─────────────────────────────────────────────────────────────────────────────
+test('recordTerminalDetail merges keys; non-overlapping keys from prior calls survive', async () => {
+  const queue = 'td-merge-non-overlapping';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {});
+  // Use 'cancelled' state to avoid the class-required validator on failed.
+  await h.boss.cancel(queue, jobId!);
+
+  await recordTerminalDetail(h.pool, SCHEMAS, jobId!, 0, {
+    state: 'cancelled',
+    detail: { cancelledBy: 'user-A', reason: 'oops' },
+  });
+  await recordTerminalDetail(h.pool, SCHEMAS, jobId!, 0, {
+    state: 'cancelled',
+    detail: { reason: 'corrected reason' },
+  });
+
+  const job = await findById(h.pool, SCHEMAS, jobId!);
+  expect(job!.terminalDetail).toEqual({
+    cancelledBy: 'user-A',       // key from first call survives
+    reason: 'corrected reason',  // key was overwritten by second call
   });
 });
 
