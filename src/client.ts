@@ -1,6 +1,7 @@
 import type { PgBoss } from 'pg-boss';
 import type { Pool } from 'pg';
 import { recordPatch, type RecordPatch } from './record.js';
+import { recordTerminalDetail, type TerminalDetail } from './terminal-detail.js';
 import { setProgress, getProgress, type ProgressResult } from './progress.js';
 import {
   findById, getRetryHistory, listJobs, latestPerQueue,
@@ -29,6 +30,15 @@ export interface BossierOptions {
 export interface BossierMethods {
   /** Write the app-hook-owned columns of a record row. */
   recordPatch: (jobId: string, attempt: number, patch: RecordPatch) => Promise<void>;
+  /**
+   * Write a worker-classified terminal detail to a chronicle row. The sole
+   * writer of `pgbossier.record.terminal_detail`. State-bound: a `'failed'`
+   * payload matches rows in `state='failed'` or `state='retry'`; `'completed'`
+   * and `'cancelled'` payloads each only match their own state.
+   */
+  recordTerminalDetail: (
+    jobId: string, attempt: number, payload: TerminalDetail,
+  ) => Promise<void>;
   /** A job's latest attempt, across all queues. `null` if never captured. */
   findById: <TInput = unknown, TOutput = unknown>(
     jobId: string,
@@ -94,6 +104,8 @@ export function bossier(options: BossierOptions): Bossier {
 
   const methods: BossierMethods = {
     recordPatch: (jobId, attempt, patch) => recordPatch(pool, s, jobId, attempt, patch),
+    recordTerminalDetail: (jobId, attempt, payload) =>
+      recordTerminalDetail(pool, s, jobId, attempt, payload),
     findById: <TInput = unknown, TOutput = unknown>(jobId: string) =>
       findById<TInput, TOutput>(pool, s, jobId),
     getRetryHistory: <TInput = unknown, TOutput = unknown>(jobId: string) =>

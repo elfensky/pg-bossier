@@ -8,9 +8,10 @@ let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
 afterAll(async () => { await h.teardown(); });
 
-/** The ten methods pg-bossier adds on top of pg-boss's API. */
+/** The pg-bossier methods we add on top of pg-boss's API. */
 const BOSSIER_METHOD_NAMES = [
-  'recordPatch', 'findById', 'getRetryHistory', 'listJobs',
+  'recordPatch', 'recordTerminalDetail',
+  'findById', 'getRetryHistory', 'listJobs',
   'latestPerQueue', 'countByState', 'countByQueue', 'listLongRunning',
   'setProgress', 'getProgress',
 ] as const;
@@ -27,6 +28,24 @@ test('recordPatch writes app-hook columns without clobbering trigger columns', a
   expect(rows[0]!.input_snapshot).toEqual({ done: 5 });
   expect(rows[0]!.state).toBe('created');
   expect(rows[0]!.data).toEqual({ in: 1 });
+});
+
+test('client.recordTerminalDetail writes terminal_detail via the proxy', async () => {
+  const queue = 'client-terminal';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 0 });
+  await h.boss.fetch(queue);                              // created -> active
+  await h.boss.fail(queue, jobId!, { err: 'terminal' });  // active  -> failed
+
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  await client.recordTerminalDetail(jobId!, 0, {
+    state: 'failed',
+    detail: { class: 'transient', message: 'test' },
+  });
+
+  const job = await client.findById(jobId!);
+  expect(job!.state).toBe('failed');
+  expect(job!.terminalDetail).toMatchObject({ class: 'transient', message: 'test' });
 });
 
 test('forwarded pg-boss queue ops run through the unified client', async () => {
