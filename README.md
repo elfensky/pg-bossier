@@ -22,7 +22,7 @@ pg-bossier is nine concrete capabilities — the goals tracked in [issue #1](htt
 | **One-step install, clean uninstall** | Adoption is one dependency and one migration; removal drops a single schema and leaves pg-boss untouched. | ✅ |
 | **pg-boss compatibility contract** | A documented tier system naming which pg-boss surfaces pg-bossier depends on and how stable each is. | ✅ |
 | **Typed failure detail** | A structured, queryable reason for every finished job — with a temporary-vs-permanent label on failures. | ✅ |
-| **Input snapshots** | An optional slot to record what data a job saw when it ran, so its inputs stay recoverable. | 🟡 |
+| **Input snapshots** | An optional slot to record what data a job saw when it ran, so its inputs stay recoverable. | ✅ |
 | **Mid-job progress** | A progress value a worker updates while a job runs, surviving crashes and retries. | 🟡 |
 | **Lifecycle events** | Subscribe to job state changes as they happen, instead of polling for them. | ⬜ |
 
@@ -225,7 +225,7 @@ const stalled = await client.listLongRunning({ longerThanSeconds: 600 });
 await client.recordPatch(jobId, 0, { input_snapshot: { userId: 42 } });
 ```
 
-The typed write API for `input_snapshot` (Goal 4) is still pending. `terminal_detail` now has its own dedicated writer — see [Recording terminal detail](#recording-terminal-detail).
+The typed write API for `input_snapshot` (Goal 4) is `recordInputSnapshot` — see [Recording input snapshots](#recording-input-snapshots). `terminal_detail` has its own dedicated writer — see [Recording terminal detail](#recording-terminal-detail).
 
 ### Recording terminal detail
 
@@ -361,6 +361,85 @@ If the source has no `failed` row at all (wrong id, never reached `failed`, sour
 
 - **`progress` (Goal 6) is not copied source → DLQ.** The DLQ job starts with no progress; its chronicle entries are its own. The source job's `progress` history stays on the source's rows and is reachable through `findDeadLetterSource` + `getProgress`.
 - **`boss.retry(dlqJobId)` (the SQS-redrive analogue) does not disturb the existing `deadLetteredAs` link.** The DLQ job gets a new attempt; its `pgbossier.record` row gets a new attempt row via the capture trigger; the existing link on the *source* job's row is unaffected.
+
+### Recording input snapshots
+
+A job's `data` payload is what the producer queued. That is not always what the worker actually processed: many jobs go fetch additional state from somewhere else (an HTTP API, another database, the filesystem) at the moment they start, and the meaningful "input" to the run is that fetched state — not the original payload. Once the external source has moved on, the row in `pgboss.job` is deleted, and the worker process is long gone, that information is unrecoverable. The input-snapshot slot is an opt-in JSONB column on `pgbossier.record` for the worker to write a snapshot of what it saw, keyed by `(jobId, attempt)`, so months later you can answer "what data did this job actually process?"
+
+#### ⚠️ Call at job-START, not job-FINISH
+
+`recordInputSnapshot` is for **inputs**, not outputs. Call it at the top of the worker handler — right after you fetch the external state and before you start processing — so the snapshot records what the job *saw on the way in*. If you call it at the end with computed results, you have destroyed the feature: you are recording the output as if it were the input, and the audit trail is wrong in a way that is hard to detect later.
+
+For outputs, use pg-boss's existing `boss.complete(jobId, output)` — pg-boss persists outputs to `pgboss.job.output`, and the capture trigger mirrors that into `pgbossier.record.output` for you.
+
+#### Worker-side example
+
+```ts
+boss.work('space-track-fetch', async (job) => {
+  // 1. Fetch the external state this attempt will operate on.
+  const snapshot = await spaceTrack.fetch({
+    catalogId: job.data.catalogId,
+    epoch: job.data.epoch,
+  });
+
+  // 2. Record it as the input snapshot for THIS attempt. attempt is
+  //    pg-boss's retry_count — 0 on the first try.
+  await client.recordInputSnapshot(job.id, job.retryCount, snapshot);
+
+  // 3. Do the work using the snapshot. If this attempt fails and pg-boss
+  //    retries, the next attempt fetches a fresh snapshot and records its
+  //    own — both stay in the audit trail under the same job id.
+  const result = await process(snapshot);
+  await boss.complete(job.id, result);
+});
+```
+
+#### Reader: two modes
+
+Read by `(jobId, attempt)` for a specific attempt, or by `jobId` alone for the most-recent non-null snapshot across attempts. The two modes return different shapes:
+
+```ts
+// Explicit attempt — returns T | null.
+const snap = await client.getInputSnapshot<SpaceTrackPayload>(jobId, 0);
+// → the snapshot value, or null if that (jobId, attempt) has no snapshot.
+
+// Most-recent across attempts — returns { snapshot, attempt } | null.
+const result = await client.getInputSnapshot<SpaceTrackPayload>(jobId);
+// → { snapshot: <value>, attempt: 2 }
+//   or null if the job has no snapshot on any attempt.
+```
+
+The exported type is `InputSnapshotResult<T>`:
+
+```ts
+import type { InputSnapshotResult } from 'pg-bossier';
+// { snapshot: T; attempt: number }
+```
+
+#### `recordPatch` vs `recordInputSnapshot`
+
+Use `recordInputSnapshot` for normal worker-start capture — it validates the snapshot is non-null and JSON-serializable, and is the writer the typed API is built around. Use `recordPatch({ input_snapshot: null })` for the one case `recordInputSnapshot` cannot express: explicitly clearing a previously-written snapshot back to SQL NULL. Both writers target the same column and last-write wins.
+
+#### Size
+
+The column is unbounded. PostgreSQL TOASTs large JSONB transparently, so a one-megabyte snapshot is mechanically fine — but `pgbossier.record` grows forever, and unbounded snapshots multiply your storage cost (≈$0.10/GB/month on most cloud providers), make `findById` projections heavier than they would otherwise be, and bloat backups. Snapshot what is forensically useful, not the whole upstream response. Compression is consumer-owned (TOAST handles large values; pg-bossier does not pre-compress).
+
+#### Index migration note for large existing installs
+
+`install()` issues a plain `CREATE INDEX IF NOT EXISTS record_input_snapshot_gin ... USING gin (input_snapshot)`. That is fine for fresh installs and for upgrades on small/medium tables. On a `pgbossier.record` table that already holds millions of rows, the index build will hold an ACCESS EXCLUSIVE lock long enough to stall capture writes. Pre-create the index concurrently *before* you call `install()`:
+
+```sql
+CREATE INDEX CONCURRENTLY record_input_snapshot_gin
+  ON pgbossier.record USING gin (input_snapshot);
+```
+
+Then run `install()` — the `IF NOT EXISTS` clause sees the index already present and skips it.
+
+#### What does NOT change
+
+- **`recordPatch({ input_snapshot: ... })` still works.** The two writers coexist; `recordInputSnapshot` is the typed front door, `recordPatch` is the lower-level path that also handles explicit clearing.
+- **The GIN index is added on install/upgrade transparently.** No action needed for small/medium installs.
+- **The capture trigger is unchanged.** It has never touched `input_snapshot` (the column is pgbossier-owned, not pg-boss-mirrored) and that stays true.
 
 ### Job progress
 

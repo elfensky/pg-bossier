@@ -16,6 +16,7 @@ const BOSSIER_METHOD_NAMES = [
   'findById', 'getRetryHistory', 'listJobs',
   'latestPerQueue', 'countByState', 'countByQueue', 'listLongRunning',
   'setProgress', 'getProgress',
+  'recordInputSnapshot', 'getInputSnapshot',
 ] as const;
 
 test('recordPatch writes app-hook columns without clobbering trigger columns', async () => {
@@ -205,4 +206,21 @@ test('client.findDeadLetterTarget via the proxy', async () => {
 
   const target = await client.findDeadLetterTarget(sourceId!);
   expect(target).toEqual({ dlqJobId, attempt: 0 });
+});
+
+test('client.recordInputSnapshot + getInputSnapshot via the proxy', async () => {
+  const queue = 'client-input-snapshot';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 0 });
+  await h.boss.fetch(queue);                              // created -> active
+  await h.boss.fail(queue, jobId!, { err: 'terminal' });  // active  -> failed
+
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  await client.recordInputSnapshot(jobId!, 0, { records: ['a', 'b'] });
+
+  const explicit = await client.getInputSnapshot<{ records: string[] }>(jobId!, 0);
+  expect(explicit).toEqual({ records: ['a', 'b'] });
+
+  const wrapped = await client.getInputSnapshot<{ records: string[] }>(jobId!);
+  expect(wrapped).toEqual({ snapshot: { records: ['a', 'b'] }, attempt: 0 });
 });

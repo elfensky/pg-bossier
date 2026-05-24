@@ -5,6 +5,9 @@ import { recordTerminalDetail, type TerminalDetail } from './terminal-detail.js'
 import { recordDeadLetter, type RecordDeadLetterArgs } from './dead-letter.js';
 import { setProgress, getProgress, type ProgressResult } from './progress.js';
 import {
+  recordInputSnapshot, getInputSnapshot, type InputSnapshotResult,
+} from './input-snapshot.js';
+import {
   findById, getRetryHistory, listJobs, latestPerQueue,
   countByState, countByQueue, listLongRunning, getEventsSince,
   findDeadLetterSource, findDeadLetterTarget,
@@ -93,6 +96,24 @@ export interface BossierMethods {
   getProgress: <TProgress = unknown>(
     jobId: string,
   ) => Promise<ProgressResult<TProgress> | null>;
+  /**
+   * Write a job's input snapshot to a specific `(jobId, attempt)` row.
+   * Sibling writer to `recordPatch({input_snapshot})`. Fail-open: a missing
+   * row or DB error warns and no-ops; only argument validation (undefined /
+   * null / non-JSON snapshot) throws.
+   */
+  recordInputSnapshot: (
+    jobId: string, attempt: number, snapshot: unknown,
+  ) => Promise<void>;
+  /**
+   * Read a job's input snapshot. With `attempt`, returns the snapshot on
+   * that exact row as `T | null`. Without `attempt`, returns the most-recent
+   * non-null snapshot as `{ snapshot, attempt } | null`.
+   */
+  getInputSnapshot: {
+    <T = unknown>(jobId: string, attempt: number): Promise<T | null>;
+    <T = unknown>(jobId: string): Promise<InputSnapshotResult<T> | null>;
+  };
   /** Open a subscription to job-lifecycle events. */
   subscribe: (opts?: SubscribeOptions) => Promise<BossierEvents>;
   /** Read pgbossier.record rows with seq > since, ordered ascending. */
@@ -145,6 +166,15 @@ export function bossier(options: BossierOptions): Bossier {
     setProgress: (jobId, progress) => setProgress(pool, s, jobId, progress),
     getProgress: <TProgress = unknown>(jobId: string) =>
       getProgress<TProgress>(pool, s, jobId),
+    recordInputSnapshot: (jobId, attempt, snapshot) =>
+      recordInputSnapshot(pool, s, jobId, attempt, snapshot),
+    // Overloaded: dispatch at the call site to land on each of the underlying
+    // free function's two public overloads. `attempt === undefined` → the
+    // wrapped-result overload; otherwise → the `T | null` overload.
+    getInputSnapshot: <T = unknown>(jobId: string, attempt?: number) =>
+      attempt === undefined
+        ? getInputSnapshot<T>(pool, s, jobId)
+        : getInputSnapshot<T>(pool, s, jobId, attempt),
     subscribe: (opts) => subscribe(pool, s, opts),
     getEventsSince: <TInput = unknown, TOutput = unknown>(
       since: bigint, opts?: GetEventsSinceOpts,
