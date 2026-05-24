@@ -21,7 +21,7 @@ pg-bossier is nine concrete capabilities — the goals tracked in [issue #1](htt
 | **Retry history** | Every attempt of a retried job preserved as its own record, with one method for the full ordered history. | ✅ |
 | **One-step install, clean uninstall** | Adoption is one dependency and one migration; removal drops a single schema and leaves pg-boss untouched. | ✅ |
 | **pg-boss compatibility contract** | A documented tier system naming which pg-boss surfaces pg-bossier depends on and how stable each is. | ✅ |
-| **Typed failure detail** | A structured, queryable reason for every finished job — with a temporary-vs-permanent label on failures. | 🟡 |
+| **Typed failure detail** | A structured, queryable reason for every finished job — with a temporary-vs-permanent label on failures. | ✅ |
 | **Input snapshots** | An optional slot to record what data a job saw when it ran, so its inputs stay recoverable. | 🟡 |
 | **Mid-job progress** | A progress value a worker updates while a job runs, surviving crashes and retries. | 🟡 |
 | **Lifecycle events** | Subscribe to job state changes as they happen, instead of polling for them. | ⬜ |
@@ -219,13 +219,65 @@ const stalled = await client.listLongRunning({ longerThanSeconds: 600 });
 
 ### Writing pg-bossier-owned columns
 
-`recordPatch` writes the columns the capture trigger leaves for the application — `terminal_detail` and `input_snapshot`. It targets a single attempt, keyed by job id and attempt number (pg-boss's `retry_count` — `0` on the first try):
+`recordPatch` writes the columns the capture trigger leaves for the application — currently `input_snapshot`. It targets a single attempt, keyed by job id and attempt number (pg-boss's `retry_count` — `0` on the first try):
 
 ```ts
 await client.recordPatch(jobId, 0, { input_snapshot: { userId: 42 } });
 ```
 
-The typed write APIs for these columns land with Goals 2 and 4.
+The typed write API for `input_snapshot` (Goal 4) is still pending. `terminal_detail` now has its own dedicated writer — see [Recording terminal detail](#recording-terminal-detail).
+
+### Recording terminal detail
+
+After a worker finishes a job, pg-bossier lets you classify the outcome with structured detail. The `recordTerminalDetail` method writes a typed shape into the audit row's `terminal_detail` JSONB column.
+
+```ts
+import { bossier } from 'pg-bossier';
+const client = bossier({ boss, pool });
+
+// Inside a worker handler:
+try {
+  // ... do work ...
+  await boss.complete(jobId, output);
+  await client.recordTerminalDetail(jobId, attempt, {
+    state: 'completed',
+    detail: { duration_ms: 42 },
+  });
+} catch (err) {
+  await boss.fail(jobId, err);
+  await client.recordTerminalDetail(jobId, attempt, {
+    state: 'failed',
+    detail: {
+      class: isRateLimit(err) ? 'transient' : 'non_retryable',
+      message: String(err),
+    },
+  });
+}
+```
+
+#### Shape
+
+`terminal_detail` is discriminated by row `state`:
+
+- `state: 'failed'` → `{ class: 'transient' | 'non_retryable', message?, where?, ...anything else }`. The `class` field is required. If you don't know, default to `'non_retryable'` (conservative: gives up rather than spinning) and put the reason in `message`.
+- `state: 'cancelled'` → `{ cancelledBy?, reason? }` (open).
+- `state: 'completed'` → any plain object (no shape enforcement).
+
+#### Retry interaction
+
+If pg-boss is going to retry the job, the row at `(jobId, attempt)` transitions through `state='retry'`. `recordTerminalDetail` writes `state: 'failed'` regardless — the SQL writer maps `'failed'` to the allowed row states `['failed', 'retry']`. The detail stays attached to the original attempt's chronicle row.
+
+#### Upgrading to Goal 2 from earlier 0.x
+
+If you used `recordPatch` to write `terminal_detail` before Goal 2 shipped, run:
+
+```sql
+UPDATE pgbossier.record SET terminal_detail = NULL;
+```
+
+or `DROP SCHEMA pgbossier CASCADE` and reinstall. The new typed reader assumes `terminal_detail` rows conform to the discriminated union; legacy shapes would be silently misread. Per pg-bossier's `0.x` API instability policy, this manual step is acceptable.
+
+`recordPatch` no longer accepts a `terminal_detail` field — TypeScript rejects it at compile time.
 
 ### Job progress
 

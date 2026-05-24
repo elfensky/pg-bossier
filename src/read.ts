@@ -1,5 +1,10 @@
 import type { Pool } from 'pg';
 import type { SchemaNames } from './sql.js';
+import type {
+  TerminalDetailCancelled,
+  TerminalDetailCompleted,
+  TerminalDetailFailed,
+} from './terminal-detail.js';
 
 export type JobState =
   | 'created' | 'active' | 'retry' | 'completed' | 'cancelled' | 'failed';
@@ -18,12 +23,22 @@ interface RecordShared<TInput> {
   seq: bigint;
 }
 
-/** One attempt's row. Discriminated on `state` — `output` differs per state. */
+/**
+ * One attempt's row. Discriminated on `state` — both `output` and
+ * `terminalDetail` differ per state. The `terminalDetail` branches are written
+ * only by `recordTerminalDetail` (see `src/terminal-detail.ts`); the cast in
+ * `mapRecord` trusts that single-writer convention.
+ *
+ * `state: 'retry'` carries `TerminalDetailFailed | null`: the worker may write
+ * detail against an attempt that is then DELETE+INSERTed by pg-boss as the
+ * next attempt, leaving the prior attempt's chronicle row in `state='retry'`
+ * with the failure detail attached.
+ */
 export type JobRecord<TInput = unknown, TOutput = unknown> =
   | (RecordShared<TInput> & { state: 'created' | 'active'; output: null;           terminalDetail: null })
-  | (RecordShared<TInput> & { state: 'retry' | 'failed';   output: unknown;        terminalDetail: unknown })
-  | (RecordShared<TInput> & { state: 'completed';          output: TOutput | null; terminalDetail: unknown })
-  | (RecordShared<TInput> & { state: 'cancelled';          output: unknown;        terminalDetail: unknown });
+  | (RecordShared<TInput> & { state: 'retry' | 'failed';   output: unknown;        terminalDetail: TerminalDetailFailed | null })
+  | (RecordShared<TInput> & { state: 'completed';          output: TOutput | null; terminalDetail: TerminalDetailCompleted | null })
+  | (RecordShared<TInput> & { state: 'cancelled';          output: unknown;        terminalDetail: TerminalDetailCancelled | null });
 
 export interface JobFilter {
   queue?: string;

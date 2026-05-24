@@ -3,7 +3,6 @@ import type { SchemaNames } from './sql.js';
 
 /** The pg-bossier-owned columns the app-hook may write via `recordPatch`. */
 export interface RecordPatch {
-  terminal_detail?: unknown;
   input_snapshot?: unknown;
 }
 
@@ -16,19 +15,20 @@ export interface RecordPatch {
  * A wrong `jobId`/`attempt` matches no row: the UPDATE is a silent no-op,
  * not an error. Patch values must be valid `jsonb`. The `progress` column
  * is written by Goal 6's `setProgress` (see `src/progress.ts`), which is its
- * sole write path — `recordPatch` deliberately does not touch it.
+ * sole write path — `recordPatch` deliberately does not touch it. The
+ * `terminal_detail` column is written by Goal 2's `recordTerminalDetail`
+ * (see `src/terminal-detail.ts`), which is its sole write path —
+ * `recordPatch` deliberately does not touch it.
  */
 export async function recordPatch(
   pool: Pool, schemas: SchemaNames, jobId: string, attempt: number, patch: RecordPatch,
 ): Promise<void> {
   await pool.query(
     `UPDATE ${schemas.pgbossier}.record SET
-       terminal_detail = COALESCE($3, terminal_detail),
-       input_snapshot  = COALESCE($4, input_snapshot)
+       input_snapshot = COALESCE($3, input_snapshot)
      WHERE job_id = $1 AND attempt = $2`,
     [
       jobId, attempt,
-      patch.terminal_detail ?? null,
       patch.input_snapshot ?? null,
     ],
   );
