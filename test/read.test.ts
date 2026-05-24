@@ -14,7 +14,9 @@ function _narrowingFixture(job: JobRecord): void {
   if (job.state === 'failed' || job.state === 'retry') {
     if (job.terminalDetail) {
       const _cls: 'transient' | 'non_retryable' = job.terminalDetail.class;
+      const _dla: string | undefined = job.terminalDetail.deadLetteredAs;
       void _cls;
+      void _dla;
     }
   }
   if (job.state === 'completed' && job.terminalDetail) {

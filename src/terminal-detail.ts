@@ -28,6 +28,7 @@ export type TerminalDetailFailed = {
   class: 'transient' | 'non_retryable';
   message?: string;
   where?: string;
+  deadLetteredAs?: string;
 } & Record<string, unknown>;
 
 /**
