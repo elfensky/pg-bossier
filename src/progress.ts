@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { stringifyOrThrow } from './json.js';
 import type { SchemaNames } from './sql.js';
 
 /** A job's effective progress: the most-recent non-null value and its source attempt. */
@@ -31,20 +32,9 @@ export async function setProgress(
   pool: Pool, schemas: SchemaNames, jobId: string, progress: unknown,
 ): Promise<void> {
   if (progress === undefined || progress === null) {
-    throw new Error('setProgress: progress must not be null or undefined');
+    throw new Error('pg-bossier: progress validation: progress must not be null or undefined');
   }
-  let json: string | undefined;
-  try {
-    json = JSON.stringify(progress);
-  } catch (err) {
-    throw new Error(
-      `setProgress: progress is not JSON-serializable: ${String(err)}`,
-    );
-  }
-  if (json === undefined) {
-    // JSON.stringify yields undefined for a function or a symbol.
-    throw new Error('setProgress: progress is not JSON-serializable');
-  }
+  const json = stringifyOrThrow(progress, 'progress');
   try {
     const { rowCount } = await pool.query(
       `UPDATE ${schemas.pgbossier}.record
