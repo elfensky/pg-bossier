@@ -1,10 +1,32 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
-import { findById, getRetryHistory, listJobs, latestPerQueue, countByState, countByQueue, listLongRunning, getEventsSince } from '../src/read.js';
+import { findById, getRetryHistory, listJobs, latestPerQueue, countByState, countByQueue, listLongRunning, getEventsSince, type JobRecord } from '../src/read.js';
+import { recordTerminalDetail } from '../src/terminal-detail.js';
 import { resolveSchemas } from '../src/sql.js';
 
 const SCHEMAS = resolveSchemas();
+
+// Compile-time fixture: JobRecord.terminalDetail narrows by state. The function
+// is never called — it exists so `tsc` checks that the discriminated-union
+// narrowing still holds. A break here fails the build, not a test run.
+function _narrowingFixture(job: JobRecord): void {
+  if (job.state === 'failed' || job.state === 'retry') {
+    if (job.terminalDetail) {
+      const _cls: 'transient' | 'non_retryable' = job.terminalDetail.class;
+      void _cls;
+    }
+  }
+  if (job.state === 'completed' && job.terminalDetail) {
+    const _anyField: unknown = job.terminalDetail['anyField'];
+    void _anyField;
+  }
+  if (job.state === 'cancelled' && job.terminalDetail) {
+    const _by: string | undefined = job.terminalDetail.cancelledBy;
+    void _by;
+  }
+}
+void _narrowingFixture;
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
@@ -372,4 +394,42 @@ test('getEventsSince returns final-state-per-attempt only', async () => {
   // One row per (job_id, attempt) — final state only.
   expect(forJob.length).toBe(1);
   expect(forJob[0]!.state).toBe('completed');
+});
+
+test('getRetryHistory returns terminalDetail typed for a retry-state row', async () => {
+  // The reader's discriminated-union narrowing claims a `retry`-state row can
+  // carry TerminalDetailFailed | null. This test exercises the runtime side of
+  // that claim: write detail against an attempt that pg-boss subsequently
+  // DELETE+INSERTs as the next attempt, leaving the prior row at state='retry'
+  // with the detail attached.
+  const queue = 'read-retry-detail';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 1 });
+
+  await h.boss.fetch(queue);                            // attempt 0 → active
+  await h.boss.fail(queue, jobId!, { err: 'boom-0' });  // attempt 0 → retry
+  await h.boss.fetch(queue);                            // attempt 1 row created (active)
+
+  await recordTerminalDetail(h.pool, SCHEMAS, jobId!, 0, {
+    state: 'failed',
+    detail: { class: 'transient', message: 'boom-0' },
+  });
+
+  const history = await getRetryHistory(h.pool, SCHEMAS, jobId!);
+  const attemptZero = history.find((r) => r.attempt === 0);
+  expect(attemptZero).toBeDefined();
+  // Attempt 0's chronicle row is at state='retry' (preserved row-version), not
+  // state='failed' — that's the case the union widening was added for.
+  expect(attemptZero!.state).toBe('retry');
+  // Compile-time narrowing: under `state === 'retry'`, terminalDetail's union
+  // includes TerminalDetailFailed, so .class is statically known.
+  if (attemptZero!.state === 'retry' && attemptZero!.terminalDetail) {
+    expect(attemptZero!.terminalDetail.class).toBe('transient');
+    expect(attemptZero!.terminalDetail.message).toBe('boom-0');
+  } else {
+    throw new Error('expected attempt 0 in retry state with terminalDetail set');
+  }
+
+  // Clean up — finish attempt 1 so pg-boss doesn't keep the queue active.
+  await h.boss.complete(queue, jobId!, { ok: true });
 });
