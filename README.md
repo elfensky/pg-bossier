@@ -279,6 +279,89 @@ or `DROP SCHEMA pgbossier CASCADE` and reinstall. The new typed reader assumes `
 
 `recordPatch` no longer accepts a `terminal_detail` field — TypeScript rejects it at compile time.
 
+### Recording dead-letter lineage
+
+When pg-boss exhausts a job's retries, it routes the failure to a separate dead-letter queue (DLQ) — a fresh job with a new id and no link back to the source. Once the source's `pgboss.job` row is gone, the DLQ entry is an orphan. pg-bossier closes that gap with one call: from your DLQ handler, record the source→DLQ link, and you can reach the full source history from a DLQ id forever after.
+
+pg-bossier cannot derive the source id from the DLQ job — pg-boss does not carry it forward. Establishing the link is a cooperative effort: the consumer preserves the source id on its own data; pg-bossier persists the link and exposes both directions of lookup.
+
+#### The `_originalJobId` consumer contract
+
+The DLQ-handler is responsible for preserving the source id by setting it on the source job's `data` payload **before** calling `boss.send()`. Convention:
+
+```ts
+// when sending the original job
+await boss.send('image-processing', {
+  _originalJobId: crypto.randomUUID(),  // self-identifying field
+  // ...your real payload
+  url: 'https://example.com/photo.jpg',
+});
+```
+
+Then, in the DLQ handler, that same field is what you hand to `recordDeadLetter`:
+
+```ts
+boss.work('image-processing.dlq', async (job) => {
+  await client.recordDeadLetter({
+    sourceJobId: job.data._originalJobId,
+    dlqJobId: job.id,
+  });
+  // ...your DLQ-specific recovery logic...
+});
+```
+
+This is a **named, surface-level requirement**, not a buried convention. Without `_originalJobId` (or an equivalent field name) on the source job's `data`, the DLQ handler has nothing to give `recordDeadLetter`, and the lineage cannot be recorded. Use any field name you like — `_originalJobId` is just the convention this README uses in examples.
+
+#### Round-trip example
+
+```ts
+// 1. Send the source job, self-identifying.
+const sourceId = crypto.randomUUID();
+await boss.send('image-processing', { _originalJobId: sourceId, url: '...' });
+
+// 2. The worker runs and fails terminally. The capture trigger writes the
+//    source's chronicle row with state='failed'. pg-boss routes a fresh job
+//    into the DLQ.
+
+// 3. The DLQ handler picks up the DLQ job and records the link.
+boss.work('image-processing.dlq', async (job) => {
+  await client.recordDeadLetter({
+    sourceJobId: job.data._originalJobId,
+    dlqJobId: job.id,
+  });
+});
+
+// 4. Later, in a forensic UI: reach the source from a DLQ id.
+const source = await client.findDeadLetterSource(dlqJobId);
+// → { jobId: '<sourceId>', attempt: <n>, queue: 'image-processing' }
+//   or null if no link was recorded.
+const history = await client.getRetryHistory(source.jobId);
+// every attempt of the source, including inputs, outputs, terminal_detail.
+
+// 5. Forward direction (source → DLQ).
+const target = await client.findDeadLetterTarget(sourceId);
+// → { dlqJobId: '<id>', attempt: <n> } or null.
+```
+
+#### Idempotency contract
+
+Calling `recordDeadLetter` twice with the same `(sourceJobId, dlqJobId)` is idempotent — the same merged value lands on the source's row. Calling with a *different* `dlqJobId` for the same source is a no-op — the first link wins, and a warning is logged. This prevents a buggy handler that regenerates DLQ ids on retry from silently overwriting an established link.
+
+If the source has no `failed` row at all (wrong id, never reached `failed`, source row purged), the call is also a silent no-op with a warning log carrying `reason: 'not_found'`.
+
+#### Composition with `recordTerminalDetail`
+
+`recordDeadLetter` and Goal 2's `recordTerminalDetail` cooperate at the key level inside the `terminal_detail` JSONB column. Either call order produces the merged shape `{ class, message, deadLetteredAs, ... }` — the writers JSONB-merge into the same row, so neither one wipes out the other's fields.
+
+#### When to call it
+
+`recordDeadLetter` only writes when the source's most-recent chronicle row is in `state = 'failed'`. It silently no-ops if the source is still in `state = 'retry'` between attempts — call it from the DLQ-handler (which runs *after* pg-boss has committed the terminal failure), not from a mid-retry worker callback. The DLQ handler is the only place that has both the source id (from `_originalJobId`) and the DLQ id (from `job.id`) at the same time anyway.
+
+#### What does NOT change
+
+- **`progress` (Goal 6) is not copied source → DLQ.** The DLQ job starts with no progress; its chronicle entries are its own. The source job's `progress` history stays on the source's rows and is reachable through `findDeadLetterSource` + `getProgress`.
+- **`boss.retry(dlqJobId)` (the SQS-redrive analogue) does not disturb the existing `deadLetteredAs` link.** The DLQ job gets a new attempt; its `pgbossier.record` row gets a new attempt row via the capture trigger; the existing link on the *source* job's row is unaffected.
+
 ### Job progress
 
 `setProgress` writes a job's current progress to its active attempt. A worker only needs `job.id` — the target attempt is resolved server-side. Pass any JSON-serializable value: a structured object, a bare string, a number. The call is fail-open: a runtime error logs a warning and resolves without throwing, so a failed progress write never fails the consumer's job. Progress values survive pg-boss retries — each attempt has its own row, so a prior attempt's final checkpoint remains readable even after the job has been retried.
