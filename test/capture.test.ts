@@ -2,6 +2,7 @@ import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
 import { recordTerminalDetail } from '../src/terminal-detail.js';
+import { recordInputSnapshot } from '../src/input-snapshot.js';
 import { resolveSchemas } from '../src/sql.js';
 import pg from 'pg';
 
@@ -219,4 +220,70 @@ test('capture trigger DO UPDATE SET clause does not list terminal_detail', async
   const setBlockMatch = /DO UPDATE SET[\s\S]*?;/i.exec(def);
   expect(setBlockMatch).not.toBeNull();
   expect(setBlockMatch![0]).not.toMatch(/terminal_detail/i);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Goal 4 regression — input_snapshot preservation across trigger fires.
+//
+// Same reasoning as the Goal 2 block above: the capture trigger is pg-boss's
+// row-mirror; `recordInputSnapshot` is the sole writer of the input_snapshot
+// column. If a future trigger change adds input_snapshot to the ON CONFLICT
+// DO UPDATE SET list, a subsequent pg-boss state UPDATE would silently
+// overwrite the worker-supplied manifest with NULL. These tests lock the
+// structural guarantee in.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('capture trigger preserves input_snapshot across subsequent fires', async () => {
+  const queue = 'cap-is-preserve';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {}, { retryLimit: 0 });
+
+  // Drive the row to a state where recordInputSnapshot can write against it.
+  await h.boss.fetch(queue);
+  await h.boss.fail(queue, jobId!, { err: 'boom' });
+  let rows = await getRecords(h.pool, jobId!);
+  expect(rows[0]!.state).toBe('failed');
+  expect(rows[0]!.input_snapshot).toBeNull();
+
+  // Worker writes the snapshot.
+  await recordInputSnapshot(h.pool, SCHEMAS, jobId!, 0, {
+    records: ['x', 'y'],
+  });
+
+  rows = await getRecords(h.pool, jobId!);
+  const before = rows[0]!.input_snapshot;
+  expect(before).toEqual({ records: ['x', 'y'] });
+
+  // Induce another capture trigger fire on the same (job_id, attempt) row.
+  // The trigger fires AFTER INSERT OR UPDATE OF state — a no-op UPDATE that
+  // mentions the state column in its SET list still fires the trigger, and
+  // exercises the ON CONFLICT DO UPDATE path inside the trigger function.
+  // We touch pgboss.job directly so we are not coupled to any specific
+  // pg-boss transition path.
+  await h.pool.query(
+    `UPDATE ${SCHEMAS.pgboss}.job SET state = state WHERE id = $1`,
+    [jobId],
+  );
+
+  rows = await getRecords(h.pool, jobId!);
+  const after = rows[0]!.input_snapshot;
+  expect(after).toEqual(before);
+});
+
+test('capture trigger DO UPDATE SET clause does not list input_snapshot', async () => {
+  // Static check on the trigger function definition. If the SET list ever
+  // grows an input_snapshot line, this fails at install time, before any
+  // row-level test would catch it.
+  const { rows } = await h.pool.query<{ def: string }>(
+    `SELECT pg_get_functiondef(p.oid) AS def
+     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = $1 AND p.proname = 'capture'`,
+    [SCHEMAS.pgbossier],
+  );
+  expect(rows[0]).toBeDefined();
+  const def = rows[0]!.def;
+
+  const setBlockMatch = /DO UPDATE SET[\s\S]*?;/i.exec(def);
+  expect(setBlockMatch).not.toBeNull();
+  expect(setBlockMatch![0]).not.toMatch(/input_snapshot/i);
 });
