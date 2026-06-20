@@ -3,6 +3,7 @@ import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
 import { recordTerminalDetail } from '../src/terminal-detail.js';
 import { recordInputSnapshot } from '../src/input-snapshot.js';
+import { findById, getRetryHistory } from '../src/read.js';
 import { resolveSchemas } from '../src/sql.js';
 import pg from 'pg';
 
@@ -32,6 +33,36 @@ test('send -> fetch -> complete is mirrored into pgbossier.record', async () => 
   rows = await getRecords(h.pool, jobId!);
   expect(rows[0]!.state).toBe('completed');
   expect(rows[0]!.output).toEqual({ ok: true });
+});
+
+test('record survives pg-boss deleting the job row from pgboss.job (forensic lookup)', async () => {
+  // Goal 1 / success-criterion #2: "what happened to job X six months ago?" must
+  // stay answerable after pg-boss's deletion_seconds maintenance has hard-DELETEd
+  // the terminal row from pgboss.job. The harness runs supervise:false so that
+  // maintenance never fires on its own — we issue the same DELETE directly, which
+  // is exactly what pg-boss's cleanup does, and assert the chronicle is intact.
+  const queue = 'cap-survives-delete';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, { forensic: 'input' });
+  await h.boss.fetch(queue);
+  await h.boss.complete(queue, jobId!, { forensic: 'output' });
+
+  const del = await h.pool.query(
+    `DELETE FROM ${SCHEMAS.pgboss}.job WHERE id = $1`, [jobId],
+  );
+  expect(del.rowCount).toBe(1);
+  const gone = await h.pool.query(
+    `SELECT 1 FROM ${SCHEMAS.pgboss}.job WHERE id = $1`, [jobId],
+  );
+  expect(gone.rows).toHaveLength(0);
+
+  // Still answerable with one typed query, with inputs and final output intact.
+  const job = await findById(h.pool, SCHEMAS, jobId!);
+  expect(job).not.toBeNull();
+  expect(job!.state).toBe('completed');
+  expect(job!.data).toEqual({ forensic: 'input' });
+  expect(job!.output).toEqual({ forensic: 'output' });
+  expect(await getRetryHistory(h.pool, SCHEMAS, jobId!)).toHaveLength(1);
 });
 
 test('cancel is mirrored', async () => {

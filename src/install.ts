@@ -28,21 +28,36 @@ export async function install(
     await client.query(`SELECT 1 FROM ${s.pgboss}.job LIMIT 0`);
 
     // Atomic install: BEGIN/COMMIT around all DDL. Postgres supports DDL
-    // in transactions; a mid-install failure rolls back everything.
+    // in transactions; a mid-install failure rolls back everything, so the
+    // schema is never left half-built.
     await client.query('BEGIN');
-    await client.query(schemaSql(s));
-    await client.query(sequenceSql(s));
-    await client.query(recordTableSql(s));
-    await client.query(recordSeqColumnSql(s));
-    await client.query(recordSeqIndexSql(s));
-    for (const idx of recordIndexesSql(s)) await client.query(idx);
-    await client.query(captureFunctionSql(s));
-    await client.query(captureTriggerSql(s));
+    try {
+      await client.query(schemaSql(s));
+      await client.query(sequenceSql(s));
+      await client.query(recordTableSql(s));
+      await client.query(recordSeqColumnSql(s));
+      await client.query(recordSeqIndexSql(s));
+      for (const idx of recordIndexesSql(s)) await client.query(idx);
+      await client.query(captureFunctionSql(s));
+      await client.query(captureTriggerSql(s));
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => { /* connection may be dead */ });
+      throw err;
+    }
+
+    // Backfill runs AFTER the DDL commits — deliberately outside the transaction.
+    // CREATE/DROP TRIGGER above takes a heavy lock on pgboss.job (DROP TRIGGER:
+    // ACCESS EXCLUSIVE; CREATE TRIGGER: SHARE ROW EXCLUSIVE), held until COMMIT.
+    // Running the backfill inside that transaction would hold the lock for the
+    // whole INSERT...SELECT, blocking every pg-boss queue write (and read) for as
+    // long as the backfill runs — freezing a live queue on a large pgboss.job.
+    // Committing first releases the lock and makes the trigger live; this
+    // INSERT...SELECT then takes only ACCESS SHARE on pgboss.job and never blocks
+    // pg-boss. ON CONFLICT DO NOTHING means a row the now-live trigger already
+    // captured in the gap is not clobbered, and re-running install() safely
+    // completes a backfill that errored here (idempotent).
     await client.query(backfillSql(s));
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => { /* connection may be dead */ });
-    throw err;
   } finally {
     client.release();
   }
