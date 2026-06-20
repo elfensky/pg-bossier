@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing has been released yet. These entries will form the first release — the
-first `develop` → `main` squash._
+_Nothing here yet — entries land here on `develop` after v0.1.0._
+
+## [0.1.0] - 2026-06-21
+
+First tagged release. Cut for the descent-app validation trial; **not yet
+published to npm** (publish is gated on that trial). Install via the `v0.1.0`
+git tag — see the README. All nine charter goals are delivered.
 
 ### Removed
 
