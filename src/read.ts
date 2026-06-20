@@ -209,12 +209,18 @@ function buildWhere(filter: JobFilter): { clause: string; params: unknown[] } {
   return { clause: conds.length ? `WHERE ${conds.join(' AND ')}` : '', params };
 }
 
-/** The single most-recently-created job in each queue, at its current state. */
+/**
+ * The single newest job in each queue, at its current state. `orderBy` selects
+ * which timestamp "newest" means: `'createdOn'` (default — most recently
+ * enqueued) or `'completedOn'` (most recently finished, `NULLS LAST` so an
+ * unfinished job never outranks a finished one). The latter answers
+ * "last finished run per scheduled queue".
+ */
 export async function latestPerQueue(
   pool: Pool,
   schemas: SchemaNames,
   queues: string[],
-  opts: { states?: JobState[] } = {},
+  opts: { states?: JobState[]; orderBy?: 'createdOn' | 'completedOn' } = {},
 ): Promise<JobRecord[]> {
   if (queues.length === 0) return [];
   const params: unknown[] = [queues];
@@ -223,12 +229,14 @@ export async function latestPerQueue(
     params.push(opts.states);
     stateClause = `AND state = ANY($${params.length})`;
   }
+  // Closed set, not user input — safe to interpolate.
+  const sortCol = opts.orderBy === 'completedOn' ? 'completed_on' : 'created_on';
   const { rows } = await pool.query<RawRecordRow>(
     `WITH ${recordCurrent(schemas)}
      SELECT DISTINCT ON (queue) *
      FROM current
      WHERE queue = ANY($1) ${stateClause}
-     ORDER BY queue, created_on DESC NULLS LAST, job_id`,
+     ORDER BY queue, ${sortCol} DESC NULLS LAST, job_id`,
     params,
   );
   return rows.map((r) => mapRecord(r));

@@ -71,8 +71,7 @@ function allowedStates(state: TerminalDetail['state']): string[] {
  *    `'transient'` or `'non_retryable'`.
  *  - `payload.detail` must be JSON-serializable (no BigInt, no circular refs).
  *
- * `recordTerminalDetail` is the *sole* writer for `pgbossier.record.terminal_detail`;
- * `recordPatch` deliberately does not accept that column.
+ * `recordTerminalDetail` is the *sole* writer for `pgbossier.record.terminal_detail`.
  */
 export async function recordTerminalDetail(
   pool: Pool,

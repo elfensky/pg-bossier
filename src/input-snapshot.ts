@@ -16,10 +16,8 @@ export interface InputSnapshotResult<T = unknown> {
 
 /**
  * Write a job's input snapshot to a specific `(jobId, attempt)` row in
- * `pgbossier.record`. Sibling writer to `recordPatch({input_snapshot})` with
- * the same JSON acceptance/error behavior — both route through
- * `stringifyOrThrow`. Prefer this method for the worker-recording-what-it-saw
- * use case; `recordPatch` remains the multi-column escape hatch.
+ * `pgbossier.record`. The sole writer of the `input_snapshot` column;
+ * serializes via `stringifyOrThrow`.
  *
  * `attempt` is **required and not server-resolved** by design. Input snapshots
  * are "this exact attempt observed this exact input"; resolving `max(attempt)`

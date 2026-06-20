@@ -177,6 +177,26 @@ test('latestPerQueue returns an empty array for an empty queue list', async () =
   expect(rows).toEqual([]);
 });
 
+test('latestPerQueue orderBy:completedOn picks the last finished job, not the last created', async () => {
+  const queue = 'read-lpq-completed';
+  await h.boss.createQueue(queue);
+  const a = await h.boss.send(queue, { n: 'a' }); // created first
+  const b = await h.boss.send(queue, { n: 'b' }); // created second -> newest by created_on
+
+  // Activate both (fetch is created-order FIFO), then finish b BEFORE a so a
+  // has the newest completed_on while b still has the newest created_on.
+  await h.boss.fetch(queue);
+  await h.boss.fetch(queue);
+  await h.boss.complete(queue, b!, {});
+  await h.boss.complete(queue, a!, {});
+
+  const byCreated = await latestPerQueue(h.pool, SCHEMAS, [queue]);
+  expect(byCreated[0]!.jobId).toBe(b);
+
+  const byCompleted = await latestPerQueue(h.pool, SCHEMAS, [queue], { orderBy: 'completedOn' });
+  expect(byCompleted[0]!.jobId).toBe(a);
+});
+
 test('countByState counts each job once by its current state, all six keys present', async () => {
   const queue = 'read-cbs';
   await h.boss.createQueue(queue);

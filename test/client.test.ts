@@ -11,7 +11,7 @@ afterAll(async () => { await h.teardown(); });
 
 /** The pg-bossier methods we add on top of pg-boss's API. */
 const BOSSIER_METHOD_NAMES = [
-  'recordPatch', 'recordTerminalDetail',
+  'recordTerminalDetail',
   'recordDeadLetter', 'findDeadLetterSource', 'findDeadLetterTarget',
   'findById', 'getRetryHistory', 'listJobs',
   'latestPerQueue', 'countByState', 'countByQueue', 'listLongRunning',
@@ -19,13 +19,13 @@ const BOSSIER_METHOD_NAMES = [
   'recordInputSnapshot', 'getInputSnapshot',
 ] as const;
 
-test('recordPatch writes app-hook columns without clobbering trigger columns', async () => {
+test('recordInputSnapshot writes app-hook columns without clobbering trigger columns', async () => {
   const queue = 'client-q';
   await h.boss.createQueue(queue);
   const jobId = await h.boss.send(queue, { in: 1 });
 
   const client = bossier({ boss: h.boss, pool: h.pool });
-  await client.recordPatch(jobId!, 0, { input_snapshot: { done: 5 } });
+  await client.recordInputSnapshot(jobId!, 0, { done: 5 });
 
   const rows = await getRecords(h.pool, jobId!);
   expect(rows[0]!.input_snapshot).toEqual({ done: 5 });
@@ -92,7 +92,7 @@ test('app-hook columns survive a later capture-trigger re-fire', async () => {
   const jobId = await h.boss.send(queue, { in: 2 });
 
   const client = bossier({ boss: h.boss, pool: h.pool });
-  await client.recordPatch(jobId!, 0, { input_snapshot: { done: 7 } });
+  await client.recordInputSnapshot(jobId!, 0, { done: 7 });
 
   await h.boss.fetch(queue); // created -> active, re-fires the trigger
 

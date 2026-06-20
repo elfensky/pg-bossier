@@ -1,6 +1,7 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 import { install, uninstall } from '../src/install.js';
+import { bossier } from '../src/client.js';
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); });
@@ -90,6 +91,41 @@ test('topology: 2:1 (unsupported) — two pg-bossier installs sharing one pg-bos
 
   await uninstall(h.pool);
   await uninstall(h.pool, { schema: 'altbossier' });
+});
+
+test('topology: full capture -> read -> event round-trip under a non-default pgbossier schema', async () => {
+  // The other topology tests only assert install-time DDL (trigger/channel names)
+  // under custom schemas. This exercises the schema-interpolated capture FUNCTION,
+  // the NOTIFY channel, and the read SQL at RUNTIME under a non-default pgbossier
+  // schema — the codepaths a descent-app install on a custom schema would hit.
+  await install(h.pool, { schema: 'altbossier_rt' }); // custom pgbossier, real pgboss
+  const client = bossier({ boss: h.boss, pool: h.pool, schema: 'altbossier_rt' });
+
+  // Subscribe first so we catch events on the schema-scoped `altbossier_rt_job` channel.
+  const events = await client.subscribe();
+  const seen: string[] = [];
+  events.on('job', (e) => seen.push(e.state));
+
+  const queue = 'topology-roundtrip';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, { in: 1 });
+  await h.boss.fetch(queue);
+  await h.boss.complete(queue, jobId!, { out: 2 });
+  await new Promise((r) => setTimeout(r, 200));
+
+  // Reads resolve against altbossier_rt.record.
+  const job = await client.findById(jobId!);
+  expect(job).not.toBeNull();
+  expect(job!.state).toBe('completed');
+  expect(job!.data).toEqual({ in: 1 });
+  expect(job!.output).toEqual({ out: 2 });
+  expect(await client.getRetryHistory(jobId!)).toHaveLength(1);
+
+  // Events arrived on the schema-scoped channel.
+  expect(seen).toContain('completed');
+
+  await events.close();
+  await uninstall(h.pool, { schema: 'altbossier_rt' });
 });
 
 test('topology: install rejects schema:"public" before any SQL', async () => {

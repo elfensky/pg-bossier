@@ -1,6 +1,5 @@
 import type { PgBoss } from 'pg-boss';
 import type { Pool } from 'pg';
-import { recordPatch, type RecordPatch } from './record.js';
 import { recordTerminalDetail, type TerminalDetail } from './terminal-detail.js';
 import { recordDeadLetter, type RecordDeadLetterArgs } from './dead-letter.js';
 import { setProgress, getProgress, type ProgressResult } from './progress.js';
@@ -28,13 +27,11 @@ export interface BossierOptions {
 
 /**
  * pg-bossier's own methods — the surface added on top of pg-boss's API:
- * `recordPatch` for the app-hook-owned columns, the Goal 5 operational read
- * methods, and the Goal 6 progress methods (`setProgress` / `getProgress`).
- * All run on the `pool` passed to `bossier()`.
+ * the Goal 2/4/6 write methods (`recordTerminalDetail` / `recordInputSnapshot`
+ * / `setProgress`), the Goal 5 operational read methods, and the Goal 7 event
+ * methods. All run on the `pool` passed to `bossier()`.
  */
 export interface BossierMethods {
-  /** Write the app-hook-owned columns of a record row. */
-  recordPatch: (jobId: string, attempt: number, patch: RecordPatch) => Promise<void>;
   /**
    * Write a worker-classified terminal detail to a chronicle row. The sole
    * writer of `pgbossier.record.terminal_detail`. State-bound: a `'failed'`
@@ -77,10 +74,13 @@ export interface BossierMethods {
   listJobs: <TInput = unknown, TOutput = unknown>(
     opts?: ListJobsOpts,
   ) => Promise<{ rows: JobRecord<TInput, TOutput>[]; total: number }>;
-  /** The most recent job in each queue, at its current state. */
+  /**
+   * The newest job in each queue, at its current state. `orderBy` chooses the
+   * timestamp: `'createdOn'` (default) or `'completedOn'` (last finished run).
+   */
   latestPerQueue: (
     queues: string[],
-    opts?: { states?: JobState[] },
+    opts?: { states?: JobState[]; orderBy?: 'createdOn' | 'completedOn' },
   ) => Promise<JobRecord[]>;
   /** Job counts by current state (all six keys present). */
   countByState: (filter?: JobFilter) => Promise<Record<JobState, number>>;
@@ -97,10 +97,10 @@ export interface BossierMethods {
     jobId: string,
   ) => Promise<ProgressResult<TProgress> | null>;
   /**
-   * Write a job's input snapshot to a specific `(jobId, attempt)` row.
-   * Sibling writer to `recordPatch({input_snapshot})`. Fail-open: a missing
-   * row or DB error warns and no-ops; only argument validation (undefined /
-   * null / non-JSON snapshot) throws.
+   * Write a job's input snapshot to a specific `(jobId, attempt)` row. The sole
+   * writer of `pgbossier.record.input_snapshot`. Fail-open: a missing row or DB
+   * error warns and no-ops; only argument validation (undefined / null /
+   * non-JSON snapshot) throws.
    */
   recordInputSnapshot: (
     jobId: string, attempt: number, snapshot: unknown,
@@ -147,7 +147,6 @@ export function bossier(options: BossierOptions): Bossier {
   });
 
   const methods: BossierMethods = {
-    recordPatch: (jobId, attempt, patch) => recordPatch(pool, s, jobId, attempt, patch),
     recordTerminalDetail: (jobId, attempt, payload) =>
       recordTerminalDetail(pool, s, jobId, attempt, payload),
     recordDeadLetter: (args) => recordDeadLetter(pool, s, args),
