@@ -326,3 +326,71 @@ test('findDeadLetterSource uses the terminal_detail GIN index', async () => {
     client.release();
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 12 — End-to-end against pg-boss's NATIVE deadLetter routing, following
+// the documented _originalJobId pattern. Locks the consumer contract: the
+// source job's id MUST be set explicitly (so the chronicle keys on it) AND
+// carried in data (so pg-boss's deadLetter copy can recover it in the DLQ
+// handler). The other tests use a synthetic dlqJobId; this exercises real
+// pg-boss 12 dead-letter behavior.
+// ─────────────────────────────────────────────────────────────────────────────
+test('native pg-boss deadLetter routing links to the source via the documented pattern', async () => {
+  const sourceQueue = 'dl-native-src';
+  const dlqQueue = 'dl-native-dlq';
+  await h.boss.createQueue(dlqQueue);
+  await h.boss.createQueue(sourceQueue, { deadLetter: dlqQueue, retryLimit: 0 });
+
+  // The source id is the self-identifying id: set as the job's ACTUAL id (so the
+  // chronicle row's job_id matches) AND carried in data (so pg-boss's deadLetter
+  // copy hands it to the DLQ handler).
+  const sourceId = randomUUID();
+  await h.boss.send(sourceQueue, { _originalJobId: sourceId, url: 'x' }, { id: sourceId });
+
+  // Fail it terminally; pg-boss routes a fresh job into the DLQ.
+  await h.boss.work(
+    sourceQueue,
+    { batchSize: 1, pollingIntervalSeconds: 0.5 },
+    () => { throw new Error('boom'); },
+  );
+
+  let dlqJob: { id: string; originalId: string | undefined } | undefined;
+  const deadline = Date.now() + 12000;
+  while (Date.now() < deadline) {
+    const [j] = await h.boss.fetch(dlqQueue);
+    if (j) {
+      dlqJob = { id: j.id, originalId: (j.data as { _originalJobId?: string })._originalJobId };
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  await h.boss.offWork(sourceQueue);
+
+  expect(dlqJob).toBeDefined();
+  // pg-boss copied the source's data into the DLQ job; the DLQ job has its own id.
+  expect(dlqJob!.originalId).toBe(sourceId);
+  expect(dlqJob!.id).not.toBe(sourceId);
+
+  // Wait for the source's 'failed' chronicle row (recordDeadLetter needs it).
+  while (Date.now() < deadline) {
+    const rs = await getRecords(h.pool, sourceId);
+    if (rs.some((r) => r.state === 'failed')) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  // The DLQ handler records the link exactly as the README documents.
+  await recordDeadLetter(h.pool, SCHEMAS, {
+    sourceJobId: dlqJob!.originalId!,
+    dlqJobId: dlqJob!.id,
+  });
+
+  // Lineage resolves both directions against the real chronicle.
+  const source = await findDeadLetterSource(h.pool, SCHEMAS, dlqJob!.id);
+  expect(source).not.toBeNull();
+  expect(source!.jobId).toBe(sourceId);
+  expect(source!.queue).toBe(sourceQueue);
+
+  const target = await findDeadLetterTarget(h.pool, SCHEMAS, sourceId);
+  expect(target).not.toBeNull();
+  expect(target!.dlqJobId).toBe(dlqJob!.id);
+});

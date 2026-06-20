@@ -275,37 +275,42 @@ pg-bossier cannot derive the source id from the DLQ job — pg-boss does not car
 
 #### The `_originalJobId` consumer contract
 
-The DLQ-handler is responsible for preserving the source id by setting it on the source job's `data` payload **before** calling `boss.send()`. Convention:
+The link has two halves, and both must be in place **when you `boss.send()`** the source job:
+
+1. **Set the source job's id explicitly** so it equals your self-identifying id. pg-bossier's chronicle keys each row on pg-boss's *actual* job id, so `recordDeadLetter`'s `sourceJobId` must be that id — not a separate value. Pass it via `send`'s `id` option.
+2. **Carry the same id on the job's `data`** (e.g. `_originalJobId`). pg-boss copies the source job's `data` into the dead-letter job, so this is how the DLQ handler recovers the source id — the DLQ job itself has a *new* id.
 
 ```ts
 // when sending the original job
-await boss.send('image-processing', {
-  _originalJobId: crypto.randomUUID(),  // self-identifying field
-  // ...your real payload
-  url: 'https://example.com/photo.jpg',
-});
+const sourceId = crypto.randomUUID();
+await boss.send(
+  'image-processing',
+  { _originalJobId: sourceId, url: 'https://example.com/photo.jpg' }, // copied into the DLQ job
+  { id: sourceId },                                                    // becomes the job's actual id
+);
 ```
 
-Then, in the DLQ handler, that same field is what you hand to `recordDeadLetter`:
+Then, in the DLQ handler, the copied field is what you hand to `recordDeadLetter`:
 
 ```ts
 boss.work('image-processing.dlq', async (job) => {
   await client.recordDeadLetter({
-    sourceJobId: job.data._originalJobId,
+    sourceJobId: job.data._originalJobId,  // == the source job's real id (set via `id` above)
     dlqJobId: job.id,
   });
   // ...your DLQ-specific recovery logic...
 });
 ```
 
-This is a **named, surface-level requirement**, not a buried convention. Without `_originalJobId` (or an equivalent field name) on the source job's `data`, the DLQ handler has nothing to give `recordDeadLetter`, and the lineage cannot be recorded. Use any field name you like — `_originalJobId` is just the convention this README uses in examples.
+This is a **named, surface-level requirement**, not a buried convention. If the self-identifying id is only in `data` but is *not* the source job's actual id (you skipped the `id` option), `recordDeadLetter` finds no matching chronicle row and silently no-ops with a `reason: 'not_found'` warning — the lineage never records. Use any field name you like for the data half; `_originalJobId` is just the convention this README uses.
 
 #### Round-trip example
 
 ```ts
-// 1. Send the source job, self-identifying.
+// 1. Send the source job, self-identifying: the id IS the job's id (so the
+//    chronicle keys on it) and rides in data (so the DLQ copy carries it).
 const sourceId = crypto.randomUUID();
-await boss.send('image-processing', { _originalJobId: sourceId, url: '...' });
+await boss.send('image-processing', { _originalJobId: sourceId, url: '...' }, { id: sourceId });
 
 // 2. The worker runs and fails terminally. The capture trigger writes the
 //    source's chronicle row with state='failed'. pg-boss routes a fresh job
