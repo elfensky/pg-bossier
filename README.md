@@ -192,6 +192,8 @@ await client.send('email', { to: 'user@example.com' });
 
 The `bossier` client exposes typed read methods over `pgbossier.record`. Because that table outlives pg-boss's row deletion, they answer operational questions long after the `pgboss.job` row is gone:
 
+> **Replacing raw `pgboss.job` queries?** [`docs/descent-app-fit.md`](docs/descent-app-fit.md) is a worked, verified mapping of common read queries (latest-per-queue, paginated lists, state/queue counts, by-id lookup, windowed failure counts) onto these methods — including which queries stay raw by design and why.
+
 ```ts
 // the latest attempt of one job — null if unknown
 const job = await client.findById(jobId);
@@ -219,13 +221,11 @@ const stalled = await client.listLongRunning({ longerThanSeconds: 600 });
 
 ### Writing pg-bossier-owned columns
 
-`recordPatch` writes the columns the capture trigger leaves for the application — currently `input_snapshot`. It targets a single attempt, keyed by job id and attempt number (pg-boss's `retry_count` — `0` on the first try):
+The capture trigger mirrors pg-boss's columns; the columns it leaves for the application each have their own dedicated, validated writer, keyed to a single attempt by job id and attempt number (pg-boss's `retry_count` — `0` on the first try):
 
-```ts
-await client.recordPatch(jobId, 0, { input_snapshot: { userId: 42 } });
-```
-
-The typed write API for `input_snapshot` (Goal 4) is `recordInputSnapshot` — see [Recording input snapshots](#recording-input-snapshots). `terminal_detail` has its own dedicated writer — see [Recording terminal detail](#recording-terminal-detail).
+- `input_snapshot` → `recordInputSnapshot` — see [Recording input snapshots](#recording-input-snapshots).
+- `terminal_detail` → `recordTerminalDetail` — see [Recording terminal detail](#recording-terminal-detail).
+- `progress` → `setProgress` — see [Job progress](#job-progress).
 
 ### Recording terminal detail
 
@@ -266,18 +266,6 @@ try {
 #### Retry interaction
 
 If pg-boss is going to retry the job, the row at `(jobId, attempt)` transitions through `state='retry'`. `recordTerminalDetail` writes `state: 'failed'` regardless — the SQL writer maps `'failed'` to the allowed row states `['failed', 'retry']`. The detail stays attached to the original attempt's chronicle row.
-
-#### Upgrading to Goal 2 from earlier 0.x
-
-If you used `recordPatch` to write `terminal_detail` before Goal 2 shipped, run:
-
-```sql
-UPDATE pgbossier.record SET terminal_detail = NULL;
-```
-
-or `DROP SCHEMA pgbossier CASCADE` and reinstall. The new typed reader assumes `terminal_detail` rows conform to the discriminated union; legacy shapes would be silently misread. Per pg-bossier's `0.x` API instability policy, this manual step is acceptable.
-
-`recordPatch` no longer accepts a `terminal_detail` field — TypeScript rejects it at compile time.
 
 ### Recording dead-letter lineage
 
@@ -416,10 +404,6 @@ import type { InputSnapshotResult } from 'pg-bossier';
 // { snapshot: T; attempt: number }
 ```
 
-#### `recordPatch` vs `recordInputSnapshot`
-
-Use `recordInputSnapshot` for normal worker-start capture — it validates the snapshot is non-null and JSON-serializable, and is the writer the typed API is built around. Use `recordPatch({ input_snapshot: null })` for the one case `recordInputSnapshot` cannot express: explicitly clearing a previously-written snapshot back to SQL NULL. Both writers target the same column and last-write wins.
-
 #### Size
 
 The column is unbounded. PostgreSQL TOASTs large JSONB transparently, so a one-megabyte snapshot is mechanically fine — but `pgbossier.record` grows forever, and unbounded snapshots multiply your storage cost (≈$0.10/GB/month on most cloud providers), make `findById` projections heavier than they would otherwise be, and bloat backups. Snapshot what is forensically useful, not the whole upstream response. Compression is consumer-owned (TOAST handles large values; pg-bossier does not pre-compress).
@@ -437,7 +421,6 @@ Then run `install()` — the `IF NOT EXISTS` clause sees the index already prese
 
 #### What does NOT change
 
-- **`recordPatch({ input_snapshot: ... })` still works.** The two writers coexist; `recordInputSnapshot` is the typed front door, `recordPatch` is the lower-level path that also handles explicit clearing.
 - **The GIN index is added on install/upgrade transparently.** No action needed for small/medium installs.
 - **The capture trigger is unchanged.** It has never touched `input_snapshot` (the column is pgbossier-owned, not pg-boss-mirrored) and that stays true.
 
@@ -462,6 +445,23 @@ const typed = await client.getProgress<{ processed: number; total: number }>(job
 ```
 
 The returned `attempt` is useful for the resumable-job pattern: a new attempt's row starts `null`, so if `getProgress` returns a value whose `attempt` is lower than the current attempt, it is a prior attempt's final checkpoint to resume from. A display-only job can ignore the `attempt` field.
+
+> **Resuming after a retry — the recommended pattern.** pg-boss treats a retry as a *restart*: its `DELETE`+`INSERT` retry path does not carry a job's mid-flight state forward, so progress kept in pg-boss's own row (e.g. writing to `pgboss.job.output`) is not reliably available to the next attempt. pg-bossier's `progress` slot lives in `pgbossier.record`, which the retry never touches — so the resume pattern is entirely pg-bossier-side and **does not use any pg-boss field**:
+>
+> ```ts
+> async function handler(job) {
+>   // At the top of the handler: pick up where a prior attempt left off.
+>   const prior = await client.getProgress<{ processed: number }>(job.id);
+>   let processed = prior?.progress.processed ?? 0;
+>
+>   for (; processed < total; processed++) {
+>     await doWork(processed);
+>     await client.setProgress(job.id, { processed }); // high-water mark
+>   }
+> }
+> ```
+>
+> You only ever store the latest position (the high-water mark), never every intermediate step — on failure you resume from it, on success `started_on`/`completed_on` give you the timing. A full per-step history, if a consumer needs one, is domain detail for the consumer's own store, not pg-bossier.
 
 The exported type is `ProgressResult<TProgress>`:
 
