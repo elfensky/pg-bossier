@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS ${s.pgbossier}.record (
   started_on      timestamptz,
   completed_on    timestamptz,
   captured_at     timestamptz NOT NULL DEFAULT now(),
+  seq             bigint      NOT NULL DEFAULT nextval('${s.pgbossier}.record_seq'),
   PRIMARY KEY (job_id, attempt)
 );`;
 }
@@ -113,12 +114,6 @@ export function recordIndexesSql(s: SchemaNames): readonly string[] {
     `CREATE INDEX IF NOT EXISTS record_input_snapshot_gin  ON ${t} USING gin (input_snapshot);`,
     `CREATE INDEX IF NOT EXISTS record_active_idx          ON ${t} (queue, started_on) WHERE state = 'active';`,
   ];
-}
-
-export function recordSeqColumnSql(s: SchemaNames): string {
-  return `
-ALTER TABLE ${s.pgbossier}.record
-  ADD COLUMN IF NOT EXISTS seq BIGINT NOT NULL DEFAULT nextval('${s.pgbossier}.record_seq');`;
 }
 
 export function recordSeqIndexSql(s: SchemaNames): string {

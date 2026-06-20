@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import {
   resolveSchemas,
   schemaSql, sequenceSql, recordTableSql, recordIndexesSql,
-  recordSeqColumnSql, recordSeqIndexSql,
+  recordSeqIndexSql,
   captureFunctionSql, captureTriggerSql, backfillSql,
 } from './sql.js';
 
@@ -35,7 +35,6 @@ export async function install(
       await client.query(schemaSql(s));
       await client.query(sequenceSql(s));
       await client.query(recordTableSql(s));
-      await client.query(recordSeqColumnSql(s));
       await client.query(recordSeqIndexSql(s));
       for (const idx of recordIndexesSql(s)) await client.query(idx);
       await client.query(captureFunctionSql(s));

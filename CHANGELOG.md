@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing here yet — entries land here on `develop` after v0.1.0._
+### Changed
+
+- Internal: the `seq` column is now defined directly in `pgbossier.record`'s `CREATE TABLE` instead of bolted on by a separate `ALTER TABLE … ADD COLUMN`. Removed the speculative ALTER-based "upgrade path" and its test — no pre-`seq` version ever shipped, so there was no in-place upgrade to support (0.x schema changes are drop+reinstall). Resulting schema is identical.
 
 ## [0.1.0] - 2026-06-21
 

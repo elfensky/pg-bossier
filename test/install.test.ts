@@ -76,33 +76,6 @@ test('install is idempotent', async () => {
   try { await install(h.pool); await install(h.pool); } finally { await h.teardown(); }
 });
 
-test('install adds seq column to a pre-existing v1 pgbossier.record (upgrade path)', async () => {
-  const h = await startHarness();
-  try {
-    // Simulate a v1 install: schema + table, no sequence/seq column.
-    await h.pool.query(`CREATE SCHEMA IF NOT EXISTS pgbossier;`);
-    await h.pool.query(`
-      CREATE TABLE pgbossier.record (
-        job_id uuid NOT NULL, queue text NOT NULL, attempt integer NOT NULL,
-        state text NOT NULL, data jsonb, output jsonb, progress jsonb,
-        terminal_detail jsonb, input_snapshot jsonb,
-        created_on timestamptz, started_on timestamptz, completed_on timestamptz,
-        captured_at timestamptz NOT NULL DEFAULT now(),
-        PRIMARY KEY (job_id, attempt)
-      );
-    `);
-    await h.pool.query(
-      `INSERT INTO pgbossier.record (job_id, queue, attempt, state)
-       VALUES ('00000000-0000-0000-0000-000000000001', 'q', 0, 'created')`,
-    );
-    await install(h.pool);
-    const { rows } = await h.pool.query<{ seq: string }>(
-      `SELECT seq::text AS seq FROM pgbossier.record`,
-    );
-    expect(rows[0]!.seq).toMatch(/^\d+$/);
-  } finally { await h.teardown(); }
-});
-
 test('install with custom schema names parameterizes trigger and channel', async () => {
   const h = await startHarness();
   try {
