@@ -21,6 +21,7 @@ first `develop` → `main` squash._
 
 ### Added
 
+- `docs/adopting-in-descent-app.md` — step-by-step adoption guide for the descent-app validation trial (install via the `v0.1.0` tag, run the migration, swap queries per the scorecard, the two contracts to honor), including a copy-paste prompt for a Claude session in descent-app. Linked from the README's git-URL install section.
 - `docs/descent-app-fit.md` — the success-criterion-#1 scorecard: a verified mapping of descent-app's `queries.js` raw SQL onto pg-bossier's read API, with the documented short list of what stays raw by design (the two `pgboss.job.output` writers and a conditional residual lookup for the deliberately-uncaptured metadata columns). Linked from the README's "Reading job history" section.
 - `latestPerQueue` gains an `orderBy?: 'createdOn' | 'completedOn'` option (default `'createdOn'`, backward-compatible). `'completedOn'` returns the last *finished* job per queue (`NULLS LAST`), matching descent-app's `getLastJobPerSchedule` "last finished run per scheduled queue" need without a behavior change for existing callers.
 - Goal 1 forensic-survival regression test: a completed job's `pgbossier.record` row (and `findById` / `getRetryHistory` reads) survive pg-boss's `deletion_seconds` hard-`DELETE` of the row from `pgboss.job` — the headline "what happened to job X six months ago?" promise (success criterion #2), previously only proven across the retry `DELETE`+`INSERT`, never across the maintenance delete.

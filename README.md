@@ -78,15 +78,19 @@ Install it via npm and run the install step once against your database.
 
 ### From a git URL (pre-publish)
 
-Until v0.1.0 is on npm, install pg-bossier directly from a tagged commit:
+Until pg-bossier is on npm, install it directly from a tag:
 
 ```bash
-npm install git+https://github.com/elfensky/pg-bossier#<commit-sha>
+npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.1.0'
 ```
 
-Always pin to a specific commit SHA rather than a branch — branch refs
-in `package-lock.json` re-resolve to the branch head on every `npm ci`,
-which makes builds non-reproducible.
+Pin to a tag (or a specific commit SHA) rather than a branch — branch
+refs in `package-lock.json` re-resolve to the branch head on every
+`npm ci`, which makes builds non-reproducible.
+
+Adopting pg-bossier in descent-app specifically? See the step-by-step in
+[`docs/adopting-in-descent-app.md`](docs/adopting-in-descent-app.md) (it
+includes a copy-paste prompt for a Claude session in that repo).
 
 ### Programmatic install
 
