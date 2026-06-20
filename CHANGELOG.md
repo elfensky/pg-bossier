@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Internal: the canonical UUID regex (the read API tests `jobId` against it to short-circuit a malformed id to a clean `null`/`[]` instead of a Postgres `uuid`-cast error) is now a single exported `UUID_RE` in `sql.ts`, replacing three identical copies in `read.ts` / `progress.ts` / `input-snapshot.ts`.
 - Internal: the `seq` column is now defined directly in `pgbossier.record`'s `CREATE TABLE` instead of bolted on by a separate `ALTER TABLE … ADD COLUMN`. Removed the speculative ALTER-based "upgrade path" and its test — no pre-`seq` version ever shipped, so there was no in-place upgrade to support (0.x schema changes are drop+reinstall). Resulting schema is identical.
 
 ## [0.1.0] - 2026-06-21

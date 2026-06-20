@@ -7,6 +7,14 @@ export interface SchemaNames {
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
 
+/**
+ * Canonical UUID format. The read API tests `jobId` against this to
+ * short-circuit a malformed id to a clean `null` / `[]` instead of letting
+ * Postgres raise `invalid input syntax for type uuid` on the `job_id` cast.
+ */
+export const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const RESERVED_SCHEMA_NAMES = new Set([
   'public',
   'information_schema',

@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { UUID_RE } from './sql.js';
 import type { SchemaNames } from './sql.js';
 import type {
   TerminalDetailCancelled,
@@ -72,9 +73,6 @@ interface RawRecordRow {
   captured_at: Date;
   seq: string;
 }
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Map a raw snake_case DB row to a camelCase `JobRecord`. The single `as` cast

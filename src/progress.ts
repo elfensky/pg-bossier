@@ -1,5 +1,6 @@
 import type { Pool } from 'pg';
 import { stringifyOrThrow } from './json.js';
+import { UUID_RE } from './sql.js';
 import type { SchemaNames } from './sql.js';
 
 /** A job's effective progress: the most-recent non-null value and its source attempt. */
@@ -9,9 +10,6 @@ export interface ProgressResult<TProgress = unknown> {
   /** The attempt number that value was written on. */
   attempt: number;
 }
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Write a job's progress to its *current* attempt's `pgbossier.record` row.

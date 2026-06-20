@@ -1,9 +1,6 @@
 import type { Pool } from 'pg';
-import type { SchemaNames } from './sql.js';
+import { UUID_RE, type SchemaNames } from './sql.js';
 import { stringifyOrThrow } from './json.js';
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A job's input snapshot read without an explicit attempt: the most-recent
  *  non-null snapshot and its source attempt. Mirrors `ProgressResult` shape. */
