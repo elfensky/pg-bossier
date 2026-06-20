@@ -35,6 +35,32 @@ test('send -> fetch -> complete is mirrored into pgbossier.record', async () => 
   expect(rows[0]!.output).toEqual({ ok: true });
 });
 
+test('a work()-driven worker (auto-complete) is mirrored created -> active -> completed', async () => {
+  // Every other happy-path test drives transitions manually via fetch()/complete().
+  // descent-app runs production workers via work(): a handler that returns a value
+  // makes pg-boss auto-complete the job with that value as output. This proves the
+  // capture trigger mirrors the lifecycle pg-boss's real polling worker produces.
+  const queue = 'cap-work-happy';
+  await h.boss.createQueue(queue);
+
+  await h.boss.work(queue, ([job]) => Promise.resolve({ handled: job!.id }));
+  const jobId = await h.boss.send(queue, { via: 'work' });
+
+  const deadline = Date.now() + 15000;
+  let rows = await getRecords(h.pool, jobId!);
+  while (rows[0]?.state !== 'completed' && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 200));
+    rows = await getRecords(h.pool, jobId!);
+  }
+  await h.boss.offWork(queue); // stop polling so it can't perturb later tests
+
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.state).toBe('completed');
+  expect(rows[0]!.output).toEqual({ handled: jobId });
+  expect(rows[0]!.started_on).not.toBeNull();   // went active
+  expect(rows[0]!.completed_on).not.toBeNull(); // reached terminal
+});
+
 test('record survives pg-boss deleting the job row from pgboss.job (forensic lookup)', async () => {
   // Goal 1 / success-criterion #2: "what happened to job X six months ago?" must
   // stay answerable after pg-boss's deletion_seconds maintenance has hard-DELETEd
