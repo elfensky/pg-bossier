@@ -1,0 +1,64 @@
+{
+    "name": "pg-bossier",
+    "version": "0.1.0",
+    "description": "Operational data-plane on pg-boss: forensic preservation with lineage and failure classes, typed query API, mid-flight progress, and subscribable job events. Extends pg-boss, never replaces it.",
+    "author": "Andrei Lavrenov <andrei@lav.ren>",
+    "license": "MIT",
+    "type": "module",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/elfensky/pg-bossier.git"
+    },
+    "bugs": {
+        "url": "https://github.com/elfensky/pg-bossier/issues"
+    },
+    "homepage": "https://github.com/elfensky/pg-bossier#readme",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist",
+        "bin"
+    ],
+    "bin": {
+        "pgbossier": "./bin/pgbossier.js"
+    },
+    "engines": {
+        "node": ">=18.3.0"
+    },
+    "keywords": [
+        "pg-boss",
+        "postgres",
+        "job-queue",
+        "audit",
+        "events",
+        "lifecycle"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "prepare": "npm run build",
+        "lint": "eslint .",
+        "lint:fix": "eslint . --fix",
+        "test": "vitest run",
+        "test:perf": "vitest bench --config vitest.perf.config.ts --run"
+    },
+    "peerDependencies": {
+        "pg-boss": "^12.18.2",
+        "pg": "^8.0.0"
+    },
+    "devDependencies": {
+        "@testcontainers/postgresql": "^12.0.0",
+        "@types/pg": "^8.20.0",
+        "eslint": "^10.4.0",
+        "pg": "^8.21.0",
+        "pg-boss": "^12.18.2",
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.59.0",
+        "vitest": "^4.1.7"
+    }
+}

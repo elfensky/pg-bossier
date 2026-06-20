@@ -1,0 +1,84 @@
+# Lint, build, and run the integration suite on every push to develop or main
+# and every PR. The suite uses @testcontainers/postgresql; Docker is preinstalled
+# on the ubuntu-latest runner, so no `services:` Postgres block is needed. A
+# separate tripwire job warns when pg-boss publishes a minor above the
+# peer-dep floor — see COMPATIBILITY.md "Version support" for the policy.
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+
+  pg-boss-version-tripwire:
+    # Warns (does not fail) when the latest published pg-boss minor is above
+    # the peer-dep floor declared in package.json. The trigger to add a
+    # floor+latest matrix (and the correctness assertions that earn it) is
+    # this warning firing. See COMPATIBILITY.md "Version support".
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare pg-boss floor vs latest published minor
+        run: |
+          set -euo pipefail
+          FLOOR_RANGE=$(node -e "console.log(require('./package.json').peerDependencies['pg-boss'])")
+          FLOOR_MM=$(printf '%s' "$FLOOR_RANGE" | sed -E 's/[^0-9]*([0-9]+)\.([0-9]+).*/\1.\2/')
+          LATEST=$(npm view pg-boss version)
+          LATEST_MM=$(printf '%s' "$LATEST" | sed -E 's/^([0-9]+)\.([0-9]+).*/\1.\2/')
+          echo "Peer-dep range: $FLOOR_RANGE  (minor: $FLOOR_MM)"
+          echo "Latest published: $LATEST     (minor: $LATEST_MM)"
+          if [ "$FLOOR_MM" = "$LATEST_MM" ]; then
+            echo "Floor and latest minor match — no tripwire."
+          else
+            echo "::warning::pg-boss latest minor ($LATEST_MM, version $LATEST) is above the peer-dep floor minor ($FLOOR_MM, range $FLOOR_RANGE). See COMPATIBILITY.md section 'Version support — no matrix today, self-firing tripwire'."
+          fi
+
+  consumer-artifact-smoke-test:
+    # Verifies the consumer install path -- npm pack + install in a fresh
+    # directory exercises the same path descent-app will use.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [verify]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Pack the package
+        run: npm pack
+      - name: Install tarball in a fresh consumer directory
+        run: |
+          set -euo pipefail
+          TARBALL=$(ls pg-bossier-*.tgz)
+          mkdir -p /tmp/consumer
+          cd /tmp/consumer
+          npm init -y
+          npm install "$GITHUB_WORKSPACE/$TARBALL"
+          # Verify dist/ ships in the tarball (no rebuild on tarball install)
+          test -f node_modules/pg-bossier/dist/index.js \
+            || (echo "ERROR: dist/index.js missing from tarball" && exit 1)
+          # Verify the bin script ships and is executable
+          test -x node_modules/pg-bossier/bin/pgbossier.js \
+            || (echo "ERROR: bin/pgbossier.js missing or not executable" && exit 1)
+          # Verify the CLI runs and exits cleanly
+          npx pgbossier --version | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || (echo "ERROR: --version output unexpected" && exit 1)

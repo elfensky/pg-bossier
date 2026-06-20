@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Git worktrees (per CLAUDE.md § Branching, worktrees, and Git workflow)
+.worktrees/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# AI
+.claude
+.claude-octopus
