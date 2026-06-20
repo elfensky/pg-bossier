@@ -326,11 +326,6 @@ export async function listLongRunning(
   return rows.map((r) => mapRecord(r));
 }
 
-export interface GetEventsSinceOpts {
-  /** Cap the returned slice. Default: 1000. */
-  limit?: number;
-}
-
 /**
  * Read rows from `pgbossier.record` whose `seq` is strictly greater than
  * `since`, ordered ascending by `seq`. Pairs with the `seq` value carried
@@ -345,9 +340,9 @@ export async function getEventsSince<TInput = unknown, TOutput = unknown>(
   pool: Pool,
   schemas: SchemaNames,
   since: bigint,
-  opts: GetEventsSinceOpts = {},
+  limit?: number,
 ): Promise<JobRecord<TInput, TOutput>[]> {
-  const limit = Math.max(1, Math.min(opts.limit ?? 1000, 10_000));
+  const cap = Math.max(1, Math.min(limit ?? 1000, 10_000));
   const { rows } = await pool.query<RawRecordRow>(
     `SELECT job_id, queue, attempt, state, data, output, progress,
             terminal_detail, input_snapshot,
@@ -356,7 +351,7 @@ export async function getEventsSince<TInput = unknown, TOutput = unknown>(
       WHERE seq > $1
       ORDER BY seq ASC
       LIMIT $2`,
-    [since.toString(), limit],
+    [since.toString(), cap],
   );
   return rows.map(mapRecord<TInput, TOutput>);
 }

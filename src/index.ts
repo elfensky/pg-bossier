@@ -11,7 +11,7 @@ export type {
 export type { RecordDeadLetterArgs } from './dead-letter.js';
 export type { ProgressResult } from './progress.js';
 export type { InputSnapshotResult } from './input-snapshot.js';
-export type { JobRecord, JobState, JobFilter, ListJobsOpts, GetEventsSinceOpts } from './read.js';
+export type { JobRecord, JobState, JobFilter, ListJobsOpts } from './read.js';
 export { subscribe } from './events.js';
 export type {
   BossierEvents, JobEvent, JobEventName,

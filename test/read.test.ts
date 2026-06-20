@@ -391,11 +391,11 @@ test('getEventsSince(0n) returns every row', async () => {
   expect(all.length).toBeGreaterThan(0);
 });
 
-test('getEventsSince respects the limit option', async () => {
+test('getEventsSince respects the limit argument', async () => {
   const queue = 'cursor-limit';
   await h.boss.createQueue(queue);
   for (let i = 0; i < 5; i++) await h.boss.send(queue, { i });
-  const events = await getEventsSince(h.pool, SCHEMAS, 0n, { limit: 3 });
+  const events = await getEventsSince(h.pool, SCHEMAS, 0n, 3);
   expect(events.length).toBe(3);
 });
 

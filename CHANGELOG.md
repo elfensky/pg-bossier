@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `getEventsSince`'s single-field options object (`GetEventsSinceOpts { limit }`) is inlined to a positional `limit?: number` — `getEventsSince(seq, limit?)` — matching the other single-parameter read methods (`findById`, `getProgress`). The `GetEventsSinceOpts` type export is removed. Pre-1.0 signature simplification; a future second option can reintroduce an options object without a stability cost while still on `0.x`.
 - Internal: the canonical UUID regex (the read API tests `jobId` against it to short-circuit a malformed id to a clean `null`/`[]` instead of a Postgres `uuid`-cast error) is now a single exported `UUID_RE` in `sql.ts`, replacing three identical copies in `read.ts` / `progress.ts` / `input-snapshot.ts`.
 - Internal: the `seq` column is now defined directly in `pgbossier.record`'s `CREATE TABLE` instead of bolted on by a separate `ALTER TABLE … ADD COLUMN`. Removed the speculative ALTER-based "upgrade path" and its test — no pre-`seq` version ever shipped, so there was no in-place upgrade to support (0.x schema changes are drop+reinstall). Resulting schema is identical.
 

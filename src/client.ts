@@ -11,7 +11,6 @@ import {
   countByState, countByQueue, listLongRunning, getEventsSince,
   findDeadLetterSource, findDeadLetterTarget,
   type JobRecord, type JobState, type JobFilter, type ListJobsOpts,
-  type GetEventsSinceOpts,
 } from './read.js';
 import { subscribe, type BossierEvents, type SubscribeOptions } from './events.js';
 import { resolveSchemas, type SchemaNames } from './sql.js';
@@ -118,7 +117,7 @@ export interface BossierMethods {
   subscribe: (opts?: SubscribeOptions) => Promise<BossierEvents>;
   /** Read pgbossier.record rows with seq > since, ordered ascending. */
   getEventsSince: <TInput = unknown, TOutput = unknown>(
-    since: bigint, opts?: GetEventsSinceOpts,
+    since: bigint, limit?: number,
   ) => Promise<JobRecord<TInput, TOutput>[]>;
 }
 
@@ -176,8 +175,8 @@ export function bossier(options: BossierOptions): Bossier {
         : getInputSnapshot<T>(pool, s, jobId, attempt),
     subscribe: (opts) => subscribe(pool, s, opts),
     getEventsSince: <TInput = unknown, TOutput = unknown>(
-      since: bigint, opts?: GetEventsSinceOpts,
-    ) => getEventsSince<TInput, TOutput>(pool, s, since, opts),
+      since: bigint, limit?: number,
+    ) => getEventsSince<TInput, TOutput>(pool, s, since, limit),
   };
   const methodNames = new Set(Object.keys(methods));
 
