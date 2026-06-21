@@ -102,6 +102,9 @@ CREATE TABLE IF NOT EXISTS ${s.pgbossier}.record (
   progress        jsonb,
   terminal_detail jsonb,
   input_snapshot  jsonb,
+  priority        integer,
+  retry_limit     integer,
+  singleton_key   text,
   created_on      timestamptz,
   started_on      timestamptz,
   completed_on    timestamptz,
@@ -137,9 +140,11 @@ BEGIN
 
     INSERT INTO ${s.pgbossier}.record
       (job_id, queue, attempt, state, data, output,
+       priority, retry_limit, singleton_key,
        created_on, started_on, completed_on, captured_at, seq)
     VALUES
       (NEW.id, NEW.name, NEW.retry_count, NEW.state, NEW.data, NEW.output,
+       NEW.priority, NEW.retry_limit, NEW.singleton_key,
        NEW.created_on, NEW.started_on, NEW.completed_on, now(), new_seq)
     ON CONFLICT (job_id, attempt) DO UPDATE SET
       state        = EXCLUDED.state,
@@ -149,6 +154,9 @@ BEGIN
       started_on   = EXCLUDED.started_on,
       completed_on = EXCLUDED.completed_on,
       seq          = new_seq;
+      -- priority / retry_limit / singleton_key are set once at INSERT and
+      -- never re-written: they're immutable job config, identical on every
+      -- transition of the same (job_id, attempt). ponytail: omit from DO UPDATE.
 
     PERFORM pg_notify(
       '${s.pgbossier}_job',
@@ -182,8 +190,10 @@ export function backfillSql(s: SchemaNames): string {
   return `
 INSERT INTO ${s.pgbossier}.record
   (job_id, queue, attempt, state, data, output,
+   priority, retry_limit, singleton_key,
    created_on, started_on, completed_on, captured_at)
 SELECT id, name, retry_count, state, data, output,
+       priority, retry_limit, singleton_key,
        created_on, started_on, completed_on, now()
 FROM ${s.pgboss}.job
 ON CONFLICT (job_id, attempt) DO NOTHING;`;
