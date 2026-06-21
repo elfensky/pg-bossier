@@ -23,6 +23,8 @@ test('topology: N:N-distinct — two pg-bossier installs, two pg-boss installs',
     CREATE TABLE IF NOT EXISTS altpgboss.job (
       id uuid PRIMARY KEY, name text NOT NULL, retry_count integer NOT NULL DEFAULT 0,
       state text NOT NULL, data jsonb, output jsonb,
+      priority integer NOT NULL DEFAULT 0, retry_limit integer NOT NULL DEFAULT 0,
+      singleton_key text,
       created_on timestamptz, started_on timestamptz, completed_on timestamptz
     );
   `);
