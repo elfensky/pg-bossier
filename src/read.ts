@@ -17,6 +17,10 @@ interface RecordShared<TInput> {
   data: TInput | null;
   progress: unknown;
   inputSnapshot: unknown;
+  /** pg-boss job config, captured once at submit (immutable per job). */
+  priority: number | null;
+  retryLimit: number | null;
+  singletonKey: string | null;
   createdOn: Date | null;
   startedOn: Date | null;
   completedOn: Date | null;
@@ -67,6 +71,9 @@ interface RawRecordRow {
   progress: unknown;
   terminal_detail: unknown;
   input_snapshot: unknown;
+  priority: number | null;
+  retry_limit: number | null;
+  singleton_key: string | null;
   created_on: Date | null;
   started_on: Date | null;
   completed_on: Date | null;
@@ -92,6 +99,9 @@ function mapRecord<TInput = unknown, TOutput = unknown>(
     progress: r.progress,
     terminalDetail: r.terminal_detail,
     inputSnapshot: r.input_snapshot,
+    priority: r.priority,
+    retryLimit: r.retry_limit,
+    singletonKey: r.singleton_key,
     createdOn: r.created_on,
     startedOn: r.started_on,
     completedOn: r.completed_on,
@@ -346,6 +356,7 @@ export async function getEventsSince<TInput = unknown, TOutput = unknown>(
   const { rows } = await pool.query<RawRecordRow>(
     `SELECT job_id, queue, attempt, state, data, output, progress,
             terminal_detail, input_snapshot,
+            priority, retry_limit, singleton_key,
             created_on, started_on, completed_on, captured_at, seq
        FROM ${schemas.pgbossier}.record
       WHERE seq > $1

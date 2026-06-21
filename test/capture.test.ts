@@ -91,6 +91,47 @@ test('record survives pg-boss deleting the job row from pgboss.job (forensic loo
   expect(await getRetryHistory(h.pool, SCHEMAS, jobId!)).toHaveLength(1);
 });
 
+test('job config columns (priority, retry_limit, singleton_key) are captured', async () => {
+  const queue = 'cap-config';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, { x: 1 }, {
+    priority: 5,
+    retryLimit: 2,
+    singletonKey: 'sk-1',
+  });
+
+  // captured at INSERT (created)
+  let rows = await getRecords(h.pool, jobId!);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.priority).toBe(5);
+  expect(rows[0]!.retry_limit).toBe(2);
+  expect(rows[0]!.singleton_key).toBe('sk-1');
+
+  // immutable config survives a state transition (the ON CONFLICT path keeps it)
+  await h.boss.fetch(queue);
+  rows = await getRecords(h.pool, jobId!);
+  expect(rows[0]!.state).toBe('active');
+  expect(rows[0]!.priority).toBe(5);
+  expect(rows[0]!.retry_limit).toBe(2);
+  expect(rows[0]!.singleton_key).toBe('sk-1');
+
+  // surfaced camelCase on the read API
+  const job = await findById(h.pool, SCHEMAS, jobId!);
+  expect(job).toMatchObject({ priority: 5, retryLimit: 2, singletonKey: 'sk-1' });
+});
+
+test('a job sent without config options captures pg-boss defaults / null', async () => {
+  const queue = 'cap-config-defaults';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {});
+  const rows = await getRecords(h.pool, jobId!);
+  expect(rows[0]!.priority).toBe(0);          // pg-boss default
+  expect(rows[0]!.singleton_key).toBeNull();  // unset → null
+  // retry_limit has a pg-boss queue default; assert it's a captured integer,
+  // not the exact value (version-sensitive).
+  expect(typeof rows[0]!.retry_limit).toBe('number');
+});
+
 test('cancel is mirrored', async () => {
   const queue = 'cap-cancel';
   await h.boss.createQueue(queue);

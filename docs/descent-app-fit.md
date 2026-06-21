@@ -2,14 +2,14 @@
 
 **Purpose.** Success criterion #1 (issue #1) is: *descent-app's raw-SQL count against `pgboss.*` drops to zero, or to a documented short list with stated reasons.* This file is that scorecard — the artifact the descent-app validation trial measures against.
 
-**Method.** Produced by mapping descent-app's actual `src/lib/jobs/queries.js` against the **current** pg-bossier API, then adversarially verifying each row against both codebases (`src/read.ts`, `src/client.ts`, `src/progress.ts`, `src/sql.ts`). Reflects the pre-trial decisions in CLAUDE.md (`recordPatch` removed, the 5 metadata columns deliberately not captured, `setProgress` read-side, `latestPerQueue` `orderBy` option). Reconcile against descent-app's queries.js at port time — this was a point-in-time read of ~10 SQL-bearing exported functions / 12 raw statements.
+**Method.** Produced by mapping descent-app's actual `src/lib/jobs/queries.js` against the **current** pg-bossier API, then adversarially verifying each row against both codebases (`src/read.ts`, `src/client.ts`, `src/progress.ts`, `src/sql.ts`). Reflects the pre-trial decisions in CLAUDE.md (`recordPatch` removed, `setProgress` read-side, `latestPerQueue` `orderBy` option) **as amended**: three of the five `pgboss.job` metadata columns — `priority`, `retry_limit`, `singleton_key` (immutable job config) — are now captured into `pgbossier.record` and exposed on `JobRecord`, reopening pre-trial decision (b) per [#26](https://github.com/elfensky/pg-bossier/issues/26). The remaining two stay uncaptured: `heartbeat_on` (live runtime state the `UPDATE OF state` trigger can't track; only meaningful for in-flight jobs, whose `pgboss.job` row still exists) and `expire_seconds` (selected-but-never-rendered). Reconcile against descent-app's queries.js at port time — this was a point-in-time read of ~10 SQL-bearing exported functions / 12 raw statements.
 
 **Legend.**
 
 | | meaning |
 |---|---|
 | ✅ **Replaced** | raw SQL eliminated. Uses a pg-bossier method, possibly plus a pure-JS shape adapter (descent-app's existing `normalizeJob` layer, re-pointed at `JobRecord`). A JS adapter is **not** raw SQL. |
-| 🔶 **Replaced + residual raw** | the query/list is replaced, but a deliberately-uncaptured column (`singleton_key` / `expire_seconds`) needs a small raw lookup **iff** the UI renders it. |
+| 🔶 **Replaced + residual raw** | the query/list is replaced, but a deliberately-uncaptured column (`heartbeat_on` / `expire_seconds`) needs a small raw lookup **iff** the UI renders it. |
 | ❌ **Raw by design** | stays raw. pg-bossier deliberately does not replace it (writes to the live `pgboss.job` — a pg-boss queue op). |
 
 ## The mapping
@@ -22,9 +22,9 @@
 | `getQueueSummaries` (b) 24h fail count | `GROUP BY name … state IN(failed,cancelled) AND completed_on > now()-24h` | `countByQueue({ queues, states:['failed','cancelled'], completedAfter })` — **one call** | ✅ |
 | `getJobStatsByState` | `GROUP BY state` | `countByState({ queues })` | ✅ (+ `Record→array[]` adapter) |
 | `getJobCountsByQueue` | `GROUP BY name` | `countByQueue({ queues })` | ✅ (+ `Record→array[]` adapter) |
-| `getJobById` | `SELECT … WHERE id=$1 AND name IN(6 queues)` | `findById(jobId)` (+ app-side queue filter, normalize) | 🔶 (`expire_seconds`/`singleton_key` if shown) |
-| `getRecentJobs` | full cols, `ORDER BY created_on DESC LIMIT n` | `listJobs({ queues, orderBy:'createdOn', limit })` | 🔶 (`singleton_key` if shown) |
-| `getJobsPaginated` | full cols + `COUNT(*)` (2 statements) | `listJobs({ queue\|queues, states, orderBy:'createdOn', limit, offset })` → `{ rows, total }` | 🔶 (`singleton_key` if shown) |
+| `getJobById` | `SELECT … WHERE id=$1 AND name IN(6 queues)` | `findById(jobId)` (+ app-side queue filter, normalize) — now carries `priority`/`retryLimit`/`singletonKey` | 🔶 (`heartbeat_on` live, in-flight only) |
+| `getRecentJobs` | full cols, `ORDER BY created_on DESC LIMIT n` | `listJobs({ queues, orderBy:'createdOn', limit })` — now carries `priority`/`retryLimit`/`singletonKey` | ✅ |
+| `getJobsPaginated` | full cols + `COUNT(*)` (2 statements) | `listJobs({ queue\|queues, states, orderBy:'createdOn', limit, offset })` → `{ rows, total }` | ✅ |
 | `updateJobOutput` | `UPDATE pgboss.job SET output=$::jsonb` | — (writes the live `pgboss.job.output`) | ❌ |
 | `mergeJobOutput` | `UPDATE pgboss.job SET output=COALESCE(output,'{}') \|\| patch` | — | ❌ |
 
@@ -36,9 +36,9 @@ Raw SQL against `pgboss.*` does **not** drop to literally zero. The honest short
 
 1. **`updateJobOutput`** — raw by design. Writes the **live** `pgboss.job.output`; that's a pg-boss queue-op write, and the *"Don't replace pg-boss queue ops"* non-goal applies. pg-bossier's `setProgress` is read-side (writes `pgbossier.record.progress`, never `pgboss.job`).
 2. **`mergeJobOutput`** — raw by design, same reason (`setProgress` also *overwrites* rather than JSONB-merges, so it isn't even semantically equivalent).
-3. **(Conditional) one residual `SELECT`** for the five deliberately-uncaptured `pgboss.job` columns (`priority`, `retry_limit`, `singleton_key`, `heartbeat_on`, `expire_seconds`) — **only if** the admin table / detail view actually renders them. Of these, only `singleton_key` and `expire_seconds` are consumed by `normalizeJob` today; the other three are SELECTed-but-unused. See [#26](https://github.com/elfensky/pg-bossier/issues/26).
+3. **(Conditional) one residual `SELECT`** for the two still-uncaptured `pgboss.job` columns — `heartbeat_on` and `expire_seconds` — **only if** the detail view actually renders them. `heartbeat_on` is live runtime state (the `UPDATE OF state` trigger can't track it, and it's only meaningful for an in-flight job, whose `pgboss.job` row is still present — so the residual read is naturally scoped to active jobs). `expire_seconds` is selected-but-never-rendered today. The other three (`priority`, `retry_limit`, `singleton_key`) are **now captured** — see the amended method note above. See [#26](https://github.com/elfensky/pg-bossier/issues/26).
 
-Everything else (8 read functions, 10 of 12 statements) eliminates its raw SQL.
+Everything else eliminates its raw SQL: of the 12 raw statements, only the two output-writers stay raw by design, plus the now-narrower conditional `heartbeat_on` lookup.
 
 ## Porting notes (not raw SQL — JS work descent-app owns)
 

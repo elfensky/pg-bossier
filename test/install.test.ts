@@ -6,7 +6,7 @@ let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
 afterAll(async () => { await h.teardown(); });
 
-test('install creates the pgbossier.record table with all 14 columns', async () => {
+test('install creates the pgbossier.record table with all 17 columns', async () => {
   const { rows } = await h.pool.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
      WHERE table_schema = 'pgbossier' AND table_name = 'record'`,
@@ -14,7 +14,8 @@ test('install creates the pgbossier.record table with all 14 columns', async () 
   const cols = rows.map((r) => r.column_name).sort();
   expect(cols).toEqual(
     ['attempt', 'captured_at', 'completed_on', 'created_on', 'data', 'input_snapshot',
-     'job_id', 'output', 'progress', 'queue', 'seq', 'started_on', 'state', 'terminal_detail'],
+     'job_id', 'output', 'priority', 'progress', 'queue', 'retry_limit', 'seq',
+     'singleton_key', 'started_on', 'state', 'terminal_detail'],
   );
 });
 
@@ -87,6 +88,8 @@ test('install with custom schema names parameterizes trigger and channel', async
       CREATE TABLE IF NOT EXISTS altpgboss.job (
         id uuid PRIMARY KEY, name text NOT NULL, retry_count integer NOT NULL DEFAULT 0,
         state text NOT NULL, data jsonb, output jsonb,
+        priority integer NOT NULL DEFAULT 0, retry_limit integer NOT NULL DEFAULT 0,
+        singleton_key text,
         created_on timestamptz, started_on timestamptz, completed_on timestamptz
       );
     `);
