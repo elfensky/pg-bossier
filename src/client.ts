@@ -12,7 +12,7 @@ import {
   findDeadLetterSource, findDeadLetterTarget,
   type JobRecord, type JobState, type JobFilter, type ListJobsOpts,
 } from './read.js';
-import { subscribe, type BossierEvents, type SubscribeOptions } from './events.js';
+import { subscribeEvents, type BossierEvents, type SubscribeOptions } from './events.js';
 import { resolveSchemas, type SchemaNames } from './sql.js';
 
 export interface BossierOptions {
@@ -113,8 +113,13 @@ export interface BossierMethods {
     <T = unknown>(jobId: string, attempt: number): Promise<T | null>;
     <T = unknown>(jobId: string): Promise<InputSnapshotResult<T> | null>;
   };
-  /** Open a subscription to job-lifecycle events. */
-  subscribe: (opts?: SubscribeOptions) => Promise<BossierEvents>;
+  /**
+   * Open a subscription to job-lifecycle events. Named `subscribeEvents` (not
+   * `subscribe`) so it never shadows pg-boss's own pub/sub `subscribe(event,
+   * name)` — that method stays reachable through the proxy. See the
+   * collision-guard test in `test/client.test.ts`.
+   */
+  subscribeEvents: (opts?: SubscribeOptions) => Promise<BossierEvents>;
   /** Read pgbossier.record rows with seq > since, ordered ascending. */
   getEventsSince: <TInput = unknown, TOutput = unknown>(
     since: bigint, limit?: number,
@@ -127,6 +132,25 @@ export interface BossierMethods {
  * surface. Returned by `bossier()`.
  */
 export type Bossier = PgBoss & BossierMethods;
+
+/**
+ * The names of pg-bossier's own methods — the single source of truth for both
+ * the Proxy's routing set and the collision-guard test (`test/client.test.ts`).
+ * `satisfies` checks every entry is a real `BossierMethods` key. Because the
+ * Proxy routes *only* these names, any method missing here is non-functional
+ * and fails its own test — so a method can't be quietly dropped from the list
+ * to dodge the collision guard, which is exactly how the `subscribe` shadow
+ * once hid (it was omitted from a hand-kept list to keep the guard green).
+ */
+export const BOSSIER_METHOD_NAMES = [
+  'recordTerminalDetail',
+  'recordDeadLetter', 'findDeadLetterSource', 'findDeadLetterTarget',
+  'findById', 'getRetryHistory', 'listJobs',
+  'latestPerQueue', 'countByState', 'countByQueue', 'listLongRunning',
+  'setProgress', 'getProgress',
+  'recordInputSnapshot', 'getInputSnapshot',
+  'subscribeEvents', 'getEventsSince',
+] as const satisfies readonly (keyof BossierMethods)[];
 
 /**
  * Wrap a started pg-boss instance into a single client that exposes pg-boss's
@@ -173,12 +197,12 @@ export function bossier(options: BossierOptions): Bossier {
       attempt === undefined
         ? getInputSnapshot<T>(pool, s, jobId)
         : getInputSnapshot<T>(pool, s, jobId, attempt),
-    subscribe: (opts) => subscribe(pool, s, opts),
+    subscribeEvents: (opts) => subscribeEvents(pool, s, opts),
     getEventsSince: <TInput = unknown, TOutput = unknown>(
       since: bigint, limit?: number,
     ) => getEventsSince<TInput, TOutput>(pool, s, since, limit),
   };
-  const methodNames = new Set(Object.keys(methods));
+  const methodNames = new Set<string>(BOSSIER_METHOD_NAMES);
 
   return new Proxy(boss, {
     get(target, prop) {

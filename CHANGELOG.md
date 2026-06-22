@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal: the canonical UUID regex (the read API tests `jobId` against it to short-circuit a malformed id to a clean `null`/`[]` instead of a Postgres `uuid`-cast error) is now a single exported `UUID_RE` in `sql.ts`, replacing three identical copies in `read.ts` / `progress.ts` / `input-snapshot.ts`.
 - Internal: the `seq` column is now defined directly in `pgbossier.record`'s `CREATE TABLE` instead of bolted on by a separate `ALTER TABLE … ADD COLUMN`. Removed the speculative ALTER-based "upgrade path" and its test — no pre-`seq` version ever shipped, so there was no in-place upgrade to support (0.x schema changes are drop+reinstall). Resulting schema is identical.
 
+### Fixed
+
+- **pg-bossier's `subscribe` no longer shadows pg-boss's own pub/sub `subscribe`.** The lifecycle-event subscription is renamed `subscribe` → **`subscribeEvents`** (on the `bossier` client and as the standalone export). The proxy resolved pg-bossier's `subscribe` first, so pg-boss's native pub/sub `subscribe(event, name)` was unreachable through the client while `publish` / `unsubscribe` still forwarded — a half-broken surface, and `PgBoss & BossierMethods` intersected two incompatible `subscribe` signatures. After the rename, every pg-boss method (including `subscribe` / `publish` / `unsubscribe`) forwards cleanly and `subscribeEvents` carries pg-bossier's events. The collision guard is now driven by the exported, complete `BOSSIER_METHOD_NAMES`: the proxy routes *only* those names, so a method can't be quietly dropped from the list to keep the guard green — which is exactly how the original shadow hid. Pre-1.0 breaking rename: callers of `client.subscribe()` / the `subscribe` export switch to `subscribeEvents`.
+
 ## [0.1.0] - 2026-06-21
 
 First tagged release. Cut for the descent-app validation trial; **not yet
