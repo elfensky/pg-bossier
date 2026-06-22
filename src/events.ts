@@ -105,7 +105,7 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
     this.failureCount = 0;
     if (this.isFirstOpen) {
       this.isFirstOpen = false;
-      // Defer the initial 'connected' so callers can register listeners after subscribe() returns.
+      // Defer the initial 'connected' so callers can register listeners after subscribeEvents() returns.
       setImmediate(() => { if (!this.closed) this.emit('connected'); });
     } else {
       this.emit('connected');
@@ -236,7 +236,7 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
   async [Symbol.asyncDispose](): Promise<void> { await this.close(); }
 }
 
-export async function subscribe(
+export async function subscribeEvents(
   pool: Pool,
   schemas: SchemaNames,
   opts: SubscribeOptions = {},

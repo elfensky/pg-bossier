@@ -104,7 +104,7 @@ test('topology: full capture -> read -> event round-trip under a non-default pgb
   const client = bossier({ boss: h.boss, pool: h.pool, schema: 'altbossier_rt' });
 
   // Subscribe first so we catch events on the schema-scoped `altbossier_rt_job` channel.
-  const events = await client.subscribe();
+  const events = await client.subscribeEvents();
   const seen: string[] = [];
   events.on('job', (e) => seen.push(e.state));
 

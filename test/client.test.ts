@@ -3,21 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { PgBoss } from 'pg-boss';
 import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
-import { bossier } from '../src/client.js';
+import { bossier, BOSSIER_METHOD_NAMES } from '../src/client.js';
 
 let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
 afterAll(async () => { await h.teardown(); });
-
-/** The pg-bossier methods we add on top of pg-boss's API. */
-const BOSSIER_METHOD_NAMES = [
-  'recordTerminalDetail',
-  'recordDeadLetter', 'findDeadLetterSource', 'findDeadLetterTarget',
-  'findById', 'getRetryHistory', 'listJobs',
-  'latestPerQueue', 'countByState', 'countByQueue', 'listLongRunning',
-  'setProgress', 'getProgress',
-  'recordInputSnapshot', 'getInputSnapshot',
-] as const;
 
 test('recordInputSnapshot writes app-hook columns without clobbering trigger columns', async () => {
   const queue = 'client-q';
@@ -131,9 +121,19 @@ test('the client exposes the read methods bound to its pool', async () => {
 
 test('pg-bossier method names do not collide with pg-boss method names', () => {
   const pgBossMethods = new Set(Object.getOwnPropertyNames(PgBoss.prototype));
-  for (const name of BOSSIER_METHOD_NAMES) {
-    expect(pgBossMethods.has(name)).toBe(false);
-  }
+  const collisions = BOSSIER_METHOD_NAMES.filter((name) => pgBossMethods.has(name));
+  expect(collisions).toEqual([]);
+});
+
+test('pg-boss pub/sub subscribe + publish stay reachable; subscribeEvents is pg-bossier\'s', () => {
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  // pg-boss's own pub/sub methods forward through the proxy (not shadowed).
+  expect(typeof client.subscribe).toBe('function');
+  expect(client.subscribe.length).toBe(2);          // pg-boss subscribe(event, name)
+  expect(typeof client.publish).toBe('function');
+  expect(typeof client.unsubscribe).toBe('function');
+  // pg-bossier's lifecycle-event subscription lives under its own name.
+  expect(typeof client.subscribeEvents).toBe('function');
 });
 
 test('the client exposes setProgress and getProgress bound to its pool', async () => {
@@ -148,9 +148,9 @@ test('the client exposes setProgress and getProgress bound to its pool', async (
   });
 });
 
-test('bossier.subscribe() returns events that fire on transitions', async () => {
+test('bossier.subscribeEvents() returns events that fire on transitions', async () => {
   const client = bossier({ boss: h.boss, pool: h.pool });
-  const events = await client.subscribe();
+  const events = await client.subscribeEvents();
   const seen: string[] = [];
   events.on('job', (e) => seen.push(e.event));
 
