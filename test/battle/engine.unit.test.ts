@@ -73,3 +73,25 @@ test('every planned job is internally consistent', () => {
     if (j.delaySeconds > 0) expect(j.outcome).toBe('complete');
   }
 });
+
+import { decideAction, isTransientError } from './engine.js';
+
+test('decideAction fails the planned-fail attempts then completes', () => {
+  const plan = planWorkload(makeRng(5), { n: 1, queues: QS })[0]!;
+  // Synthesise a known plan instead of relying on the random one:
+  const p: PlannedJob = { ...plan, plannedFails: 2 };
+  expect(decideAction(p, 0)).toBe('fail');
+  expect(decideAction(p, 1)).toBe('fail');
+  expect(decideAction(p, 2)).toBe('complete');
+  expect(decideAction(p, 3)).toBe('complete');
+});
+
+test('isTransientError classifies retryable Postgres/connection errors', () => {
+  expect(isTransientError({ code: '40001' })).toBe(true); // serialization
+  expect(isTransientError({ code: '40P01' })).toBe(true); // deadlock
+  expect(isTransientError({ code: '57P01' })).toBe(true); // admin shutdown (terminate_backend)
+  expect(isTransientError({ code: '08006' })).toBe(true); // connection failure
+  expect(isTransientError(new Error('Connection terminated unexpectedly'))).toBe(true);
+  expect(isTransientError({ code: '23505' })).toBe(false); // unique_violation — real bug
+  expect(isTransientError(new Error('boom'))).toBe(false);
+});

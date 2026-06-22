@@ -127,3 +127,32 @@ export function planWorkload(rng: Rng, opts: { n: number; queues: readonly Queue
   }
   return jobs;
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Drivers apply the plan to the job they RECEIVE, keyed on attempt index — the
+// debate's linchpin (spec Decision 2). `attemptIndex` is the count of prior
+// handler/fetch invocations for that job id, NOT an assumed identity.
+// ──────────────────────────────────────────────────────────────────────────
+export function decideAction(plan: PlannedJob, attemptIndex: number): 'fail' | 'complete' {
+  return attemptIndex < plan.plannedFails ? 'fail' : 'complete';
+}
+
+// Transient Postgres / connection errors that a driver op should retry rather
+// than treat as a changed outcome (spec Decision 3).
+const TRANSIENT_CODES = new Set([
+  '40001', // serialization_failure
+  '40P01', // deadlock_detected
+  '55P03', // lock_not_available
+  '57014', // query_canceled
+  '57P01', // admin_shutdown (pg_terminate_backend)
+  '08000', '08003', '08006', // connection exceptions
+  '53300', // too_many_connections
+]);
+
+export function isTransientError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && TRANSIENT_CODES.has(code)) return true;
+  const msg = (err as { message?: unknown } | null)?.message;
+  return typeof msg === 'string'
+    && /terminat|reset by peer|ECONNRESET|connection (closed|ended|refused|terminated)/i.test(msg);
+}
