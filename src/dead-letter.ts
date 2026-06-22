@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { BossierDb } from './db.js';
 import type { SchemaNames } from './sql.js';
 
 /** Arguments for {@link recordDeadLetter}. */
@@ -31,7 +31,7 @@ export interface RecordDeadLetterArgs {
  * preserves the other's keys.
  */
 export async function recordDeadLetter(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   args: RecordDeadLetterArgs,
 ): Promise<void> {
@@ -49,7 +49,7 @@ export async function recordDeadLetter(
   }
 
   try {
-    const { rowCount } = await pool.query(
+    const { rowCount } = await db.query(
       `
       WITH target AS (
         SELECT job_id, attempt, terminal_detail
@@ -76,7 +76,7 @@ export async function recordDeadLetter(
       // Either (a) no failed row for sourceJobId, or (b) an existing
       // deadLetteredAs differs from the new one. Distinguish via a follow-up
       // SELECT so the warning carries an actionable reason.
-      const { rows } = await pool.query<{ existing: string | null }>(
+      const { rows } = await db.query<{ existing: string | null }>(
         `SELECT terminal_detail->>'deadLetteredAs' AS existing
            FROM ${schemas.pgbossier}.record
           WHERE job_id = $1 AND state = 'failed'

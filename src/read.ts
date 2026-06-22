@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { BossierDb } from './db.js';
 import { UUID_RE } from './sql.js';
 import type { SchemaNames } from './sql.js';
 import type {
@@ -112,12 +112,12 @@ function mapRecord<TInput = unknown, TOutput = unknown>(
 
 /** A job's latest attempt, across all queues. `null` if never captured. */
 export async function findById<TInput = unknown, TOutput = unknown>(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   jobId: string,
 ): Promise<JobRecord<TInput, TOutput> | null> {
   if (!UUID_RE.test(jobId)) return null;
-  const { rows } = await pool.query<RawRecordRow>(
+  const { rows } = await db.query<RawRecordRow>(
     `SELECT * FROM ${schemas.pgbossier}.record
      WHERE job_id = $1
      ORDER BY attempt DESC
@@ -129,12 +129,12 @@ export async function findById<TInput = unknown, TOutput = unknown>(
 
 /** Every attempt of a job, oldest first. `[]` if unknown. */
 export async function getRetryHistory<TInput = unknown, TOutput = unknown>(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   jobId: string,
 ): Promise<JobRecord<TInput, TOutput>[]> {
   if (!UUID_RE.test(jobId)) return [];
-  const { rows } = await pool.query<RawRecordRow>(
+  const { rows } = await db.query<RawRecordRow>(
     `SELECT * FROM ${schemas.pgbossier}.record
      WHERE job_id = $1
      ORDER BY attempt ASC`,
@@ -225,7 +225,7 @@ function buildWhere(filter: JobFilter): { clause: string; params: unknown[] } {
  * "last finished run per scheduled queue".
  */
 export async function latestPerQueue(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   queues: string[],
   opts: { states?: JobState[]; orderBy?: 'createdOn' | 'completedOn' } = {},
@@ -239,7 +239,7 @@ export async function latestPerQueue(
   }
   // Closed set, not user input — safe to interpolate.
   const sortCol = opts.orderBy === 'completedOn' ? 'completed_on' : 'created_on';
-  const { rows } = await pool.query<RawRecordRow>(
+  const { rows } = await db.query<RawRecordRow>(
     `WITH ${recordCurrent(schemas)}
      SELECT DISTINCT ON (queue) *
      FROM current
@@ -256,12 +256,12 @@ const ALL_STATES: readonly JobState[] = [
 
 /** Job counts by current state. Zero-fills all six states. */
 export async function countByState(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   filter: JobFilter = {},
 ): Promise<Record<JobState, number>> {
   const { clause, params } = buildWhere(filter);
-  const { rows } = await pool.query<{ state: JobState; count: number }>(
+  const { rows } = await db.query<{ state: JobState; count: number }>(
     `WITH ${recordCurrent(schemas)}
      SELECT state, count(*)::int AS count
      FROM current
@@ -278,12 +278,12 @@ export async function countByState(
 
 /** Job counts by queue. */
 export async function countByQueue(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   filter: JobFilter = {},
 ): Promise<Record<string, number>> {
   const { clause, params } = buildWhere(filter);
-  const { rows } = await pool.query<{ queue: string; count: number }>(
+  const { rows } = await db.query<{ queue: string; count: number }>(
     `WITH ${recordCurrent(schemas)}
      SELECT queue, count(*)::int AS count
      FROM current
@@ -308,7 +308,7 @@ const DEFAULT_LONG_RUNNING_SECONDS = 900;
  * `state = 'active'`; the retried-job test in `read.test.ts` pins that invariant.
  */
 export async function listLongRunning(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   opts: { queue?: string; longerThanSeconds?: number; limit?: number } = {},
 ): Promise<JobRecord[]> {
@@ -325,7 +325,7 @@ export async function listLongRunning(
     params.push(opts.queue);
     queueClause = `AND queue = $${params.length}`;
   }
-  const { rows } = await pool.query<RawRecordRow>(
+  const { rows } = await db.query<RawRecordRow>(
     `SELECT * FROM ${schemas.pgbossier}.record
      WHERE state = 'active' ${queueClause}
        AND started_on < now() - make_interval(secs => $1)
@@ -347,13 +347,13 @@ export async function listLongRunning(
  * NOT the full transition sequence within an attempt.
  */
 export async function getEventsSince<TInput = unknown, TOutput = unknown>(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   since: bigint,
   limit?: number,
 ): Promise<JobRecord<TInput, TOutput>[]> {
   const cap = Math.max(1, Math.min(limit ?? 1000, 10_000));
-  const { rows } = await pool.query<RawRecordRow>(
+  const { rows } = await db.query<RawRecordRow>(
     `SELECT job_id, queue, attempt, state, data, output, progress,
             terminal_detail, input_snapshot,
             priority, retry_limit, singleton_key,
@@ -376,11 +376,11 @@ export async function getEventsSince<TInput = unknown, TOutput = unknown>(
  * `record_terminal_detail_gin` (see `src/sql.ts`).
  */
 export async function findDeadLetterSource(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   dlqJobId: string,
 ): Promise<{ jobId: string; attempt: number; queue: string } | null> {
-  const { rows } = await pool.query<{ jobId: string; attempt: number; queue: string }>(
+  const { rows } = await db.query<{ jobId: string; attempt: number; queue: string }>(
     `SELECT job_id AS "jobId", attempt, queue
        FROM ${schemas.pgbossier}.record
       WHERE terminal_detail @> jsonb_build_object('deadLetteredAs', $1::text)
@@ -398,11 +398,11 @@ export async function findDeadLetterSource(
  * carries that link.
  */
 export async function findDeadLetterTarget(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   sourceJobId: string,
 ): Promise<{ dlqJobId: string; attempt: number } | null> {
-  const { rows } = await pool.query<{ dlqJobId: string; attempt: number }>(
+  const { rows } = await db.query<{ dlqJobId: string; attempt: number }>(
     `SELECT terminal_detail->>'deadLetteredAs' AS "dlqJobId", attempt
        FROM ${schemas.pgbossier}.record
       WHERE job_id = $1
@@ -417,7 +417,7 @@ export async function findDeadLetterTarget(
 
 /** Filtered, paginated job list over the current view, with an exact total. */
 export async function listJobs<TInput = unknown, TOutput = unknown>(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   opts: ListJobsOpts = {},
 ): Promise<{ rows: JobRecord<TInput, TOutput>[]; total: number }> {
@@ -427,7 +427,7 @@ export async function listJobs<TInput = unknown, TOutput = unknown>(
   // an unmapped value would otherwise interpolate `ORDER BY undefined`.
   const orderCol = ORDER_COLUMNS[opts.orderBy ?? 'createdOn'] ?? ORDER_COLUMNS.createdOn;
   const { clause, params } = buildWhere(opts);
-  const { rows } = await pool.query<RawRecordRow & { total_count: string }>(
+  const { rows } = await db.query<RawRecordRow & { total_count: string }>(
     `WITH ${recordCurrent(schemas)}
      SELECT *, count(*) OVER () AS total_count
      FROM current
@@ -440,7 +440,7 @@ export async function listJobs<TInput = unknown, TOutput = unknown>(
   if (rows.length === 0 && offset > 0) {
     // `count(*) OVER ()` only rides along on returned rows; an offset past
     // the end yields none, so count separately to keep `total` exact.
-    const counted = await pool.query<{ count: number }>(
+    const counted = await db.query<{ count: number }>(
       `WITH ${recordCurrent(schemas)}
        SELECT count(*)::int AS count
        FROM current

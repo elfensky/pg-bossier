@@ -19,3 +19,5 @@ export type {
   SubscribeOptions,
 } from './events.js';
 export type { SchemaNames } from './sql.js';
+export { pgBossDb } from './db.js';
+export type { BossierDb } from './db.js';
