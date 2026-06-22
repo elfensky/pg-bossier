@@ -24,3 +24,11 @@ test('makeRng.int respects inclusive bounds; pick returns a member', () => {
   const items = ['x', 'y', 'z'] as const;
   for (let i = 0; i < 50; i++) expect(items).toContain(rng.pick(items));
 });
+
+test('makeRng.chance honors the 0 and 1 boundaries', () => {
+  const rng = makeRng(11);
+  for (let i = 0; i < 100; i++) {
+    expect(rng.chance(0)).toBe(false); // r() < 0 never true
+    expect(rng.chance(1)).toBe(true);  // r() < 1 always true ([0,1) range)
+  }
+});

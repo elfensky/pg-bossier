@@ -26,7 +26,10 @@ export function makeRng(seed: number): Rng {
   return {
     next: r,
     int,
-    pick: <T>(arr: readonly T[]): T => arr[int(0, arr.length - 1)]!,
+    pick: <T>(arr: readonly T[]): T => {
+      if (arr.length === 0) throw new RangeError('pick: empty array');
+      return arr[int(0, arr.length - 1)]!;
+    },
     chance: (p: number): boolean => r() < p,
   };
 }
