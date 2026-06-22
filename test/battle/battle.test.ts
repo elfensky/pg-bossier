@@ -10,6 +10,11 @@ const SCHEMAS = resolveSchemas();
 const SEED = process.env['BATTLE_SEED'] === 'random'
   ? Math.floor(Math.random() * 2 ** 31)
   : Number(process.env['BATTLE_SEED'] ?? 0xc0ffee);
+// Scale knob. Default 200 is the CI gate size. Raising BATTLE_N past ~2,500 hits
+// two ceilings: sendWorkload sends serially (setup slows), and assertEventsCatchUp's
+// getEventsSince read caps at 10,000 rows (≈2,500 jobs × up to 4 attempts) — beyond
+// that the catch-up stream truncates and the events check can spuriously report
+// missing terminals. For larger soak runs, batch the sends and page getEventsSince.
 const N = Number(process.env['BATTLE_N'] ?? 200);
 const WORKERS = 5;
 const QUEUES: battle.QueueDef[] = [
