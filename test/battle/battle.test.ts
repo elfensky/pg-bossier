@@ -95,17 +95,16 @@ test('Phase C — fail-open: pg-boss ops never block while the audit path is bro
       const id = await h.boss.send(q, { key: `outage-${i}` });
       ids.push(id!);
     }
-    for (const id of ids) {
-      const fetched = await h.boss.fetch(q);
-      expect(fetched && fetched.length).toBeTruthy();
-    }
-    // complete whatever is active (fetch returns arbitrary order)
+    // Drive every job to completion DURING the outage. send/fetch/complete all
+    // fire the (renamed-away) capture trigger and must not throw — that is the
+    // fail-open contract. Bounded so a stall can't hang the test.
     let drained = 0;
-    while (drained < ids.length) {
+    for (let guard = 0; drained < ids.length && guard < 200; guard++) {
       const batch = await h.boss.fetch(q, { batchSize: 20 });
-      if (!batch || batch.length === 0) break;
+      if (!batch || batch.length === 0) { await new Promise((r) => setTimeout(r, 50)); continue; }
       for (const j of batch) { await h.boss.complete(q, j.id, { ok: true }); drained++; }
     }
+    expect(drained).toBe(ids.length);
     return ids;
   });
   expect(outageIds).toHaveLength(15);
