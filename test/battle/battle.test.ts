@@ -119,3 +119,79 @@ test('Phase C — fail-open: pg-boss ops never block while the audit path is bro
   expect(hist.at(-1)!.state).toBe('completed');
   expect(hist[0]!.data).toEqual({ key: 'after-restore' });
 }, 60_000);
+
+const FULL = process.env['BATTLE_CHAOS_FULL'] === '1';
+
+test.runIf(FULL)('Phase D — connection kill: chronicle stays consistent + recovers', { retry: 2 }, async () => {
+  const QD: battle.QueueDef[] = [{ name: 'battle-killA', pattern: 'pull' }, { name: 'battle-killB', pattern: 'push' }];
+  const QDN = QD.map((q) => q.name);
+  const jobs = battle.planWorkload(battle.makeRng(SEED + 1), { n: 60, queues: QD });
+  await battle.createQueues(h.boss, QD);
+  const local = await battle.sendWorkload(h.boss, jobs);
+  await battle.cancelPlanned(h.boss, local);
+
+  const attemptsSeen = new Map<string, number>();
+  await h.boss.work('battle-killB', { pollingIntervalSeconds: 0.5, localConcurrency: WORKERS },
+    battle.makePushHandler(local, attemptsSeen));
+  const ac = new AbortController();
+  const puller = battle.runPullDriver(h.boss, h.pool, SCHEMAS, 'battle-killA', local, attemptsSeen, ac.signal);
+
+  // Kill backends a few times mid-storm.
+  for (let i = 0; i < 3; i++) {
+    await new Promise((r) => setTimeout(r, 400));
+    await battle.killBackends(h.pool).catch(() => 0); // the kill may sever its own ack
+  }
+
+  // Best-effort settle — outcomes are NOT asserted under kill (Decision 6).
+  await battle.waitForDrain(h.pool, SCHEMAS, QDN, 90_000).catch(() => { /* contract-only below */ });
+  ac.abort();
+  await Promise.allSettled([puller]);
+  await h.boss.offWork('battle-killB');
+
+  // Contract: no chronicle corruption (no dup PK / non-distinct seq).
+  const violations = battle.findGlobalViolations(await battle.collectAllRows(h.pool, SCHEMAS, QDN));
+  expect(violations, violations.join('; ')).toEqual([]);
+
+  // Recovery: a fresh job after the storm is captured normally.
+  const rq = 'battle-kill-recover';
+  await h.boss.createQueue(rq);
+  const rid = await h.boss.send(rq, { key: 'recovered' });
+  await h.boss.fetch(rq);
+  await h.boss.complete(rq, rid!, { ok: true });
+  const hist = await client.getRetryHistory(rid!);
+  expect(hist.at(-1)!.state).toBe('completed');
+}, 180_000);
+
+test('mini — singleton dedup collapses same-key sends to one job', async () => {
+  const q = 'battle-singleton';
+  // 'short' policy: unique index on (name, singletonKey) in 'created' state —
+  // guarantees the second send with the same key is deduped (returns null).
+  await h.boss.createQueue(q, { policy: 'short' });
+  const id1 = await h.boss.send(q, {}, { singletonKey: 'dup' });
+  const id2 = await h.boss.send(q, {}, { singletonKey: 'dup' });
+  expect(id1).toBeTruthy();
+  expect(id2).toBeNull(); // deduped
+  expect(await client.getRetryHistory(id1!)).toHaveLength(1);
+}, 60_000);
+
+test('mini — dead-letter lineage round-trips via recordDeadLetter', async () => {
+  const src = 'battle-dlq-src';
+  const dlq = 'battle-dlq-dead';
+  await h.boss.createQueue(dlq);
+  await h.boss.createQueue(src, { deadLetter: dlq });
+
+  const srcId = await h.boss.send(src, { key: 'dlq' }, { retryLimit: 0, deadLetter: dlq });
+  await h.boss.fetch(src);
+  await h.boss.fail(src, srcId!, { err: 'boom' });
+  await new Promise((r) => setTimeout(r, 300)); // let pg-boss enqueue the DLQ job
+
+  const { rows } = await h.pool.query<{ id: string }>(
+    `SELECT id FROM ${SCHEMAS.pgboss}.job WHERE name = $1 ORDER BY created_on DESC LIMIT 1`, [dlq],
+  );
+  expect(rows).toHaveLength(1);
+  const dlqId = rows[0]!.id;
+
+  await client.recordDeadLetter({ sourceJobId: srcId!, dlqJobId: dlqId });
+  expect(await client.findDeadLetterTarget(srcId!)).toMatchObject({ dlqJobId: dlqId });
+  expect(await client.findDeadLetterSource(dlqId)).toMatchObject({ jobId: srcId! });
+}, 60_000);

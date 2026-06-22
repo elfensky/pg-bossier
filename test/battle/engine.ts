@@ -408,6 +408,19 @@ export async function assertEventsCatchUp(
 // ──────────────────────────────────────────────────────────────────────────
 // Chaos injectors.
 // ──────────────────────────────────────────────────────────────────────────
+export async function killBackends(pool: Pool): Promise<number> {
+  // Terminate every other backend on this database — the pool's and pg-boss's
+  // connections both reconnect on next use. The trigger fires inside pg-boss's
+  // own txn, so a killed op rolls back BOTH the job change and its chronicle
+  // row: complete-row-or-none, never a partial (spec Decision 6).
+  const { rows } = await pool.query<{ n: string }>(
+    `SELECT count(pg_terminate_backend(pid))::text AS n
+     FROM pg_stat_activity
+     WHERE pid <> pg_backend_pid() AND datname = current_database()`,
+  );
+  return Number(rows[0]!.n);
+}
+
 export async function forensicDelete(
   pool: Pool, schemas: SchemaNames, jobIds: readonly string[],
 ): Promise<number> {
