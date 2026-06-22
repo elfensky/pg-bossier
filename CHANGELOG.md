@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Capture three immutable `pgboss.job` config columns into `pgbossier.record`** — `priority`, `retry_limit`, `singleton_key`. The capture trigger and the install backfill now mirror them, and `JobRecord` exposes them as `priority` / `retryLimit` / `singletonKey` (`number | null`, `number | null`, `string | null`). This lets descent-app's `getJobById` / `getRecentJobs` / `getJobsPaginated` read fully from pg-bossier (the admin table's "Pri" and "Retries X/Y" cells and the detail modal's `singletonKey`) without a residual raw `SELECT` against `pgboss.job`. Reopens the 2026-06-20 pre-trial decision (b) — the trial surfaced the concrete need (a blank Pri column), the documented trigger for revisiting [#26](https://github.com/elfensky/pg-bossier/issues/26). Scoped deliberately: the other two of the five metadata columns stay uncaptured — `heartbeat_on` is live runtime state the `UPDATE OF state` trigger structurally can't track (and only meaningful for in-flight jobs, whose `pgboss.job` row still exists), and `expire_seconds` is selected-but-never-rendered. These three are immutable job config (set once at `send()`), so they're written only on the INSERT and never re-written on a state transition. **0.x schema change: existing installs re-run `uninstall()` + `install()`** (drop+reinstall, per the established 0.x convention — no in-place ALTER); the backfill repopulates config for every job still present in `pgboss.job`.
 
+- Seeded chaos/battle-test harness (`test/battle/`): drives N jobs of varied
+  shape/outcome through concurrent push + pull workers and asserts the
+  `pgbossier.record` chronicle stays faithful per job, plus forensic-delete
+  survival, fail-open (audit-path outage), and a gated connection-kill phase
+  (`BATTLE_CHAOS_FULL=1`). Reproducible via `BATTLE_SEED`; tunable via `BATTLE_N`.
+
 ### Changed
 
 - `getEventsSince`'s single-field options object (`GetEventsSinceOpts { limit }`) is inlined to a positional `limit?: number` — `getEventsSince(seq, limit?)` — matching the other single-parameter read methods (`findById`, `getProgress`). The `GetEventsSinceOpts` type export is removed. Pre-1.0 signature simplification; a future second option can reintroduce an options object without a stability cost while still on `0.x`.
