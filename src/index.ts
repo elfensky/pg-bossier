@@ -21,3 +21,5 @@ export type {
 export type { SchemaNames } from './sql.js';
 export { pgBossDb } from './db.js';
 export type { BossierDb } from './db.js';
+export { getLiveState, getLiveHeartbeat } from './live.js';
+export type { LiveState } from './live.js';
