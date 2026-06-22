@@ -180,7 +180,7 @@ test('mini — dead-letter lineage round-trips via recordDeadLetter', async () =
   await h.boss.createQueue(dlq);
   await h.boss.createQueue(src, { deadLetter: dlq });
 
-  const srcId = await h.boss.send(src, { key: 'dlq' }, { retryLimit: 0, deadLetter: dlq });
+  const srcId = await h.boss.send(src, { key: 'dlq' }, { retryLimit: 0 });
   await h.boss.fetch(src);
   await h.boss.fail(src, srcId!, { err: 'boom' });
   await new Promise((r) => setTimeout(r, 300)); // let pg-boss enqueue the DLQ job
