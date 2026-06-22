@@ -1,3 +1,7 @@
+import type { PgBoss } from 'pg-boss';
+import type { Pool } from 'pg';
+import type { SchemaNames } from '../../src/sql.js';
+import type { Bossier } from '../../src/client.js';
 import type { JobState } from '../../src/read.js';
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -226,4 +230,181 @@ export function fingerprint(info: RunInfo, jobId: string, plan: PlannedJob, errs
     `  replay: BATTLE_SEED=${info.seed} BATTLE_ONLY_JOB=${jobId} npx vitest run test/battle/battle.test.ts`,
     ...errs.map((e) => `  ✗ ${e}`),
   ].join('\n');
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// IO layer. Drivers act on the job they RECEIVE; transient errors retry with
+// read-back reconciliation.
+// ──────────────────────────────────────────────────────────────────────────
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+export async function withRetry<T>(fn: () => Promise<T>, attempts = 6): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isTransientError(err)) throw err;
+      lastErr = err;
+      await sleep(50 * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
+export async function createQueues(boss: PgBoss, queues: readonly QueueDef[]): Promise<void> {
+  for (const q of queues) await boss.createQueue(q.name);
+}
+
+export async function sendWorkload(boss: PgBoss, jobs: readonly PlannedJob[]): Promise<Map<string, PlannedJob>> {
+  const byId = new Map<string, PlannedJob>();
+  for (const job of jobs) {
+    const opts: PgBoss.SendOptions = {
+      retryLimit: job.retryLimit,
+      retryDelay: 0, // retries are immediately re-fetchable → fast, deterministic
+      priority: job.priority,
+      singletonKey: job.singletonKey,
+    };
+    const id = job.delaySeconds > 0
+      ? await boss.sendAfter(job.queue, { key: job.key }, opts, job.delaySeconds)
+      : await boss.send(job.queue, { key: job.key }, opts);
+    if (!id) throw new Error(`battle: send returned null for ${job.key} (unexpected singletonKey collision)`);
+    byId.set(id, job);
+  }
+  return byId;
+}
+
+export async function cancelPlanned(boss: PgBoss, byId: Map<string, PlannedJob>): Promise<void> {
+  // Cancel from 'created' before any worker/driver runs → deterministic
+  // created→cancelled, no race (spec Drivers / Phase A).
+  for (const [id, job] of byId) {
+    if (job.outcome === 'cancel') await boss.cancel(job.queue, id);
+  }
+}
+
+export function makePushHandler(
+  byId: Map<string, PlannedJob>,
+  attemptsSeen: Map<string, number>,
+): (jobs: PgBoss.Job[]) => Promise<{ ok: true }> {
+  // batchSize defaults to 1, so `jobs` holds one job per call; throwing fails
+  // exactly that job (auto-retry if retries remain), returning auto-completes it.
+  return async (jobs: PgBoss.Job[]): Promise<{ ok: true }> => {
+    for (const job of jobs) {
+      const plan = byId.get(job.id);
+      if (!plan) continue; // not part of our workload
+      const idx = attemptsSeen.get(job.id) ?? 0;
+      attemptsSeen.set(job.id, idx + 1);
+      if (decideAction(plan, idx) === 'fail') {
+        throw new Error(`battle: planned fail ${plan.key} attempt ${idx}`);
+      }
+    }
+    return { ok: true };
+  };
+}
+
+async function alreadyAdvanced(pool: Pool, schemas: SchemaNames, jobId: string): Promise<boolean> {
+  // Read-back reconciliation: an ambiguous commit (ack lost after Postgres
+  // committed) shows the job already off 'active'. Treat as applied (Decision 3).
+  const { rows } = await pool.query<{ state: string }>(
+    `SELECT state FROM ${schemas.pgboss}.job WHERE id = $1`, [jobId],
+  );
+  return rows.length === 0 || rows[0]!.state !== 'active';
+}
+
+export async function runPullDriver(
+  boss: PgBoss,
+  pool: Pool,
+  schemas: SchemaNames,
+  queue: string,
+  byId: Map<string, PlannedJob>,
+  attemptsSeen: Map<string, number>,
+  signal: AbortSignal,
+): Promise<void> {
+  while (!signal.aborted) {
+    const batch = await withRetry(() => boss.fetch(queue, { batchSize: 10 }));
+    if (!batch || batch.length === 0) { await sleep(50); continue; }
+    for (const job of batch) {
+      const plan = byId.get(job.id);
+      if (!plan) { await boss.complete(queue, job.id); continue; }
+      const idx = attemptsSeen.get(job.id) ?? 0;
+      attemptsSeen.set(job.id, idx + 1);
+      const act = decideAction(plan, idx);
+      try {
+        if (act === 'fail') await boss.fail(queue, job.id, { err: `planned ${idx}` });
+        else await boss.complete(queue, job.id, { ok: true });
+      } catch (err) {
+        if (!isTransientError(err)) throw err;
+        if (await alreadyAdvanced(pool, schemas, job.id)) continue;
+        await withRetry(() => (act === 'fail'
+          ? boss.fail(queue, job.id, { err: `planned ${idx}` })
+          : boss.complete(queue, job.id, { ok: true })));
+      }
+    }
+  }
+}
+
+export async function waitForDrain(
+  pool: Pool, schemas: SchemaNames, queues: readonly string[], deadlineMs: number,
+): Promise<void> {
+  const start = Date.now();
+  let stable = 0;
+  while (Date.now() - start < deadlineMs) {
+    const { rows } = await pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM ${schemas.pgbossier}.record
+       WHERE queue = ANY($1) AND state IN ('created', 'active')`,
+      [queues],
+    );
+    if (rows[0]!.n === '0') {
+      if (++stable >= 3) return; // stable across 3 polls → drained
+    } else {
+      stable = 0;
+    }
+    await sleep(100);
+  }
+  throw new Error(`battle: workload did not drain within ${deadlineMs}ms`);
+}
+
+export async function collectAllRows(
+  pool: Pool, schemas: SchemaNames, queues: readonly string[],
+): Promise<{ jobId: string; attempt: number; seq: bigint }[]> {
+  const { rows } = await pool.query<{ job_id: string; attempt: number; seq: string }>(
+    `SELECT job_id, attempt, seq FROM ${schemas.pgbossier}.record WHERE queue = ANY($1)`,
+    [queues],
+  );
+  return rows.map((r) => ({ jobId: r.job_id, attempt: r.attempt, seq: BigInt(r.seq) }));
+}
+
+export async function assertWorkload(
+  client: Bossier,
+  pool: Pool,
+  schemas: SchemaNames,
+  byId: Map<string, PlannedJob>,
+  queues: readonly string[],
+  info: RunInfo,
+): Promise<void> {
+  const only = process.env['BATTLE_ONLY_JOB'];
+  const failures: string[] = [];
+
+  for (const [id, plan] of byId) {
+    if (only && only !== id) continue;
+    const hist = await client.getRetryHistory(id);
+    const rows: PerAttempt[] = hist.map((h) => ({
+      attempt: h.attempt,
+      state: h.state,
+      priority: h.priority,
+      retryLimit: h.retryLimit,
+      singletonKey: h.singletonKey,
+      dataJson: JSON.stringify(h.data),
+    }));
+    const errs = diffChronicle(rows, plan);
+    if (errs.length) failures.push(fingerprint(info, id, plan, errs));
+  }
+
+  const globalErrs = findGlobalViolations(await collectAllRows(pool, schemas, queues));
+  if (globalErrs.length) {
+    failures.push(`BATTLE GLOBAL INVARIANT [phase=${info.phase}] seed=${info.seed}\n`
+      + globalErrs.map((e) => `  ✗ ${e}`).join('\n'));
+  }
+
+  if (failures.length) throw new Error(`\n${failures.join('\n\n')}`);
 }
