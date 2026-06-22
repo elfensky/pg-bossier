@@ -1,19 +1,18 @@
 # Battle-test (chaos) harness (design)
 
-**Status:** v1 — brainstormed, pre-implementation.
+**Status:** v2 — post-debate. Incorporates the eight named changes from the 5-way `/octo:debate` (Gemini, Codex, Copilot, Sonnet, Opus; 2 rounds), transcript at `~/.claude-octopus/debates/pg-bossier/001-consistent-testing-practices/`. Verdict was unanimous SHIP-WITH-NAMED-CHANGES.
 **Tracking issue:** none yet (test-only; open a follow-up if the harness surfaces a real defect).
 **Charter rubric:** cross-cutting hardening — exercises the Goal 1 capture substrate, the Goal 2/3 detail/lineage writers, the Goal 5 reads, and the Goal 7 events under randomized, concurrent, adversarial load. Not a new charter goal; a confidence instrument for the descent-app trial.
-**Lands:** directly on `develop` (test-only — no `src/` change except a backward-compatible `startHarness` options param), per CLAUDE.md's "bugfixes, chores, refactors, and docs may be committed directly."
+**Lands:** directly on `develop` (test-only — no `src/` change at all), per CLAUDE.md's "bugfixes, chores, refactors, and docs may be committed directly."
 
 ## What ships
 
-A seeded, randomized, concurrent chaos harness that drives N jobs of varied shape through varied outcomes, throws four kinds of "monkey" at the system, and asserts pg-bossier's `pgbossier.record` chronicle stays faithful.
+A seeded, randomized, concurrent chaos harness that drives N jobs of varied shape through varied outcomes, throws chaos "monkeys" at the system, and asserts pg-bossier's `pgbossier.record` chronicle stays faithful.
 
-1. **`test/battle/engine.ts`** — pure functions over `{ pool, boss }` (no vitest imports): a seeded PRNG (`mulberry32`), a workload planner, push/pull job drivers, the four chaos injectors, and the oracle assertions. Reusable and independently readable.
-2. **`test/battle/battle.test.ts`** — the vitest orchestrator: runs the phases in order, gates the inherently-flaky monkeys behind an env flag, prints the seed.
-3. **One tiny edit to `test/harness.ts`** — `startHarness(opts?: { supervise?: boolean; schedule?: boolean })`, defaulting to the current `false`/`false`, so the cron phase can request a supervise-on instance. Backward-compatible; every existing caller is unaffected.
+1. **`test/battle/engine.ts`** — pure functions over `{ pool, boss }` (no vitest imports): a seeded PRNG (`mulberry32`), a workload planner, the plan-applying job drivers, the chaos injectors, the oracle assertions, and the failure-diagnostics emitter. Reusable and independently readable.
+2. **`test/battle/battle.test.ts`** — the vitest orchestrator: runs the phases in order, gates the flaky monkey behind an env flag, prints the seed.
 
-No new runtime dependency. The seeded PRNG is ~5 lines. No new `src/` surface.
+No new runtime dependency. The seeded PRNG is ~5 lines. No new `src/` surface, and no change to `test/harness.ts` — every phase runs on the existing `supervise:false, schedule:false` harness (real cron is cut; `sendAfter` needs no supervise).
 
 ## Why
 
@@ -21,79 +20,92 @@ The existing tests are **deterministic, per-feature, single-threaded**: `capture
 
 Ahead of the descent-app validation trial, the useful question is: *does pg-bossier hold up under a real, messy, concurrent production workload?* That is what this harness answers, repeatably and in CI.
 
-## Core idea: an oracle, not a smoke test
+## Tier placement (what this is and isn't)
+
+Per the debate's tooling survey, this harness sits in the **"library correctness under load"** tier (Tokio / Crossbeam / vitest-suite style) — **not** the deterministic-simulation tier (FoundationDB / TigerBeetle VOPR / madsim / turmoil) and **not** the distributed-chaos tier (Jepsen / Toxiproxy). We don't own the runtime, so byte-level execution replay is impossible by construction. We also don't reach for property-based frameworks (`fast-check` / Hypothesis) — see Decision 7. And it is **not** a benchmark: performance lives in the existing `tinybench`-based `test/perf/chronicle-scale.bench.ts` (criterion/JMH-style fixed-fixture sampling). Correctness-under-load and performance stay separate suites; this doc cross-references the bench, does not merge with it.
+
+## Core idea: an oracle, with bounded exactness
 
 The harness keeps **ground truth** for every job it creates: queue, config (`retryLimit` / `priority` / `singletonKey` / optional `deadLetter`), the outcome sequence it drove, the expected number of attempt rows, and the expected terminal state. It then asserts the chronicle matches that ground truth.
 
-Key property that makes exactness compatible with concurrency: **concurrency changes only interleaving, never a job's outcome.** A job planned to `fail→retry→complete` ends `completed` with 2 retry rows whether it ran alone or amid a storm. So the main workload can be driven fully concurrently and *still* assert exact per-job results.
+The property that makes exactness compatible with concurrency, **stated precisely**: concurrency changes interleaving and *cross-job ordering*, but **not a single job's own outcome**, *provided the drivers act on the job they were handed and retry transient DB errors* (Drivers, below). So:
 
-Chaos that genuinely loses or perturbs data — fail-open outage, connection kill, background cron inserts — necessarily relaxes to **invariant-only** assertions (defined per phase below).
+- **Per-`job_id` facts are asserted exactly** — that job's own attempt count, the state of each of its attempts, its `data`, its captured config. These are interleaving-invariant.
+- **Cross-job facts are asserted as invariants, never exactly** — no duplicate `(job_id, attempt)`, all `seq` values distinct, `max(seq)` advances. There are **no** assertions about cross-job ordering, relative timestamps between different jobs, or array position. (Those *are* nondeterministic under a real concurrent Postgres workload — the debate's central correction. Asserting them would flake; we don't write them.)
+- Chaos that genuinely loses data — fail-open outage, connection kill — relaxes even per-job assertions to the documented invariants for that phase.
 
-## Reproducibility
+## Reproducibility — and its honest boundary
 
-- Seeded PRNG (`mulberry32`). Seed resolved from `BATTLE_SEED` (default a fixed constant so CI is deterministic; `BATTLE_SEED=random` for local fuzzing).
-- The seed is **printed at start and re-printed on any failure**, so any flake is reproducible by re-running with that exact seed.
-- Scale knobs (env, with defaults): `BATTLE_N` (≈200 jobs), queue count (≈5), concurrent `work()` workers (≈4).
+- Seeded PRNG (`mulberry32`). Seed from `BATTLE_SEED` (default a fixed constant so CI is deterministic; `BATTLE_SEED=random` to fuzz locally). Scale knobs: `BATTLE_N` (≈200 jobs), queue count (≈5), concurrent `work()` workers (≈4).
+- **The boundary, stated in the harness header so nobody loses an afternoon to it:** the seed reproduces the **job plan set** (which jobs get which config and outcome), *not* the execution interleaving. pg-boss polling, the Node event loop, and Postgres lock/commit ordering are nondeterministic; re-running the same seed gives the same *planned outcomes*, not the same *schedule*. That is exactly enough for the bounded-exact oracle above and no more.
+- **Replay diagnostics (hard requirement, not optional).** On any assertion failure the harness emits a full **fingerprint** — `BATTLE_SEED`, `BATTLE_N`, worker count, phase, queue, `jobId`, `attempt`, and expected-vs-actual — **and** persists the failing job's plan (and the run's plan set) to a file. A single-case replay mode (`BATTLE_ONLY_JOB=<jobId>` / load a persisted plan JSON) re-runs one job's plan in isolation. This recovers ~90% of what property-based shrinking would give us (Decision 7) and is the difference between a useful and a useless chaos test.
 
 Note: `Math.random()` / `Date.now()` are fine here — the workflow-script ban on them does not apply to vitest tests. The PRNG is for *reproducibility*, not because randomness is unavailable.
 
+## Drivers (the linchpin)
+
+Under the storm, `boss.fetch(queue)` returns an **arbitrary available job, never "this driver's job."** So a per-job pull loop that assumes its `fetch` returned its own job is broken by construction. Both consumption patterns therefore **apply the plan to whatever job they receive**, keyed on the received job's `id` + `retryCount`:
+
+- **push / worker**: a real `boss.work(queue, handler)`. The handler looks up the received job's plan and compares `job.retryCount` to its planned failure count: `retryCount < plannedFails` → throw (pg-boss auto-retries/fails); else → return the planned output (auto-completes). Deterministic per job regardless of poll timing or which worker wins.
+- **pull**: `fetch` a batch, then for **each fetched job** look up *its* plan (by `id`) and `complete`/`fail` per that plan and its `retryCount` — identical decision logic to the handler. Never assumes identity.
+
+**Transient-error handling.** Driver operations (`fetch` / `complete` / `fail`) retry on transient Postgres errors — `40001` serialization failure, lock timeout, connection reset, pool exhaustion — with bounded backoff. Critically, a retry **reads back the job's current state first** and reconciles, so an ambiguous commit (connection lost *after* Postgres committed) does not double-apply. With this, a transient error is a *driver* hiccup, not a changed job *outcome*, and the per-job exact assertions hold honestly.
+
 ## Workload variety (seeded, per job)
 
-- **Consumption pattern** — both, racing on shared queues:
-  - **push / worker**: a real `boss.work(queue, handler)`. The handler decides throw-vs-return from `job.retryCount` vs the job's plan, so the push path is deterministic regardless of poll timing.
-  - **pull**: manual `send` → `fetch` → `complete`/`fail`.
-- **Config**: randomized `retryLimit` (0–3), `priority`, a **unique** `singletonKey` per job (exercises the captured config columns without dedup muddying the oracle), and some jobs configured with a `deadLetter` queue.
-- **Outcome plan**: one of `complete` / `fail-terminal` / `fail→retry→…→complete` / `fail→exhaust` / `cancel` / `sendAfter`-delayed.
-- **Dedicated mini-cases** (not part of the randomized body, to keep that oracle exact): one singleton-dedup case (two sends, same key, one job) and one dead-letter case (`recordDeadLetter` → `findDeadLetterSource`/`findDeadLetterTarget` round-trip).
+- **Consumption pattern**: push/worker and pull, racing on shared queues (see Drivers).
+- **Config**: randomized `retryLimit` (0–3), `priority`, a **unique** `singletonKey` per job (exercises the captured config columns without dedup muddying the oracle), some jobs with a `deadLetter` queue.
+- **Outcome plan**: one of `complete` / `fail-terminal` / `fail→retry→…→complete` / `fail→exhaust` / `cancel` / **`sendAfter`-delayed** (short delay, e.g. 1 s — the scheduled/delayed shape; becomes fetchable after the delay and is then driven to its planned outcome like any other job; needs no `supervise`).
+- **Dedicated mini-cases** (outside the randomized body, to keep that oracle clean): a singleton-dedup case (two sends, same key → one job) and a dead-letter case (`recordDeadLetter` → `findDeadLetterSource`/`findDeadLetterTarget` round-trip).
 
 ## Phases
 
 | Phase | What it does | Assertion tier | Default CI |
 |---|---|---|---|
-| **A — Concurrency storm + oracle** | Build N planned jobs; drive them **all concurrently** (push handlers + pull drivers + `send` floods racing). This *is* the concurrency monkey. | **Exact** per job: row count == attempts; every non-final attempt state == `retry`; final state == expected terminal; `data` == sent; `priority`/`retry_limit`/`singleton_key` == sent config. **Global**: no duplicate `(job_id, attempt)`; all `seq` values distinct (the trigger consumes a fresh `nextval` on every fire) and `max(seq)` advances across the run — gaps are allowed, since `nextval` is consumed even on a caught trigger exception. **Events**: a `subscribe()` listener sees a terminal event for every terminal job (catch-up via `getEventsSince` tolerated). | ✅ |
+| **A — Concurrency storm + oracle** | Build N planned jobs (incl. `sendAfter`-delayed); drive them **all concurrently** via the plan-applying push handlers + pull drivers + `send` floods racing. This *is* the concurrency monkey. | **Exact, per `job_id` only**: that job's row count == attempts; each non-final attempt state == `retry`; final state == expected terminal; `data` == sent; `priority`/`retry_limit`/`singleton_key` == sent config. **Invariants (cross-job)**: no duplicate `(job_id, attempt)`; all `seq` distinct; `max(seq)` advances. **No** cross-job ordering / timestamp / array-position assertions. **Events**: assert via `getEventsSince` **catch-up** (the authority) that every terminal job has a terminal event; the live `subscribe()` listener is exercised but its delivery is **not** asserted exactly (NOTIFY isn't guaranteed under load). | ✅ |
 | **B — Forensic-delete** | `DELETE` a seeded sample of `pgboss.job` rows (simulates `deletion_seconds` maintenance and the retry `DELETE`+`INSERT`). | **Survival**: `findById` / `getRetryHistory` still return the deleted jobs, with `data` / `output` / attempt history intact. | ✅ |
-| **C — Fail-open** | Mid-run, **rename `pgbossier.record` away** (`ALTER TABLE … RENAME TO record__chaos`) so the trigger's INSERT fails and is swallowed by its `EXCEPTION WHEN OTHERS`. Drive a batch of jobs. Rename back. | **Invariant**: no pg-boss op throws or blocks during the outage; every job reaches its terminal state in `pgboss.job`; capture **resumes** — a fresh job created and driven *after* restore gets a complete, faithful chronicle. Rows for the outage window are legitimately absent — that is what fail-open *means*, and the test asserts that absence is tolerated, not that it doesn't happen. | ✅ |
-| **D — Connection / pool kill** | `SELECT pg_terminate_backend(pid)` against the pool's and pg-boss's backends mid-batch, several rounds, then let it settle. | **Invariant**: no chronicle corruption (no duplicate PK; `seq` monotonic); **recovery** — a fresh `send → fetch → complete` after the storm is captured normally. | `BATTLE_CHAOS_FULL=1` |
-| **E — Cron / scheduled** | A **separate `supervise:true, schedule:true`** harness on its own container (so background inserts can't perturb A–D's counts). `sendAfter(queue, data, opts, seconds)` delayed job asserted to run and be captured (fast). A real `boss.schedule(queue, '* * * * *')` registration asserted to fire and be captured, behind a >70 s wait. | **Exact** for the `sendAfter` job. **Loose** for real cron: every cron-fired job that reached a terminal state and still exists in `pgboss.job` has a faithful chronicle row. | sendAfter: ✅ · real cron: `BATTLE_CHAOS_FULL=1` |
+| **C — Fail-open** | Mid-run, **rename `pgbossier.record` away** (`ALTER TABLE … RENAME TO record__chaos`) so the trigger's INSERT fails and is swallowed by its `EXCEPTION WHEN OTHERS`. Drive a batch. Rename back. | **Invariant**: no pg-boss op throws or blocks during the outage; every job reaches its terminal state in `pgboss.job`; capture **resumes** — a fresh job created and driven *after* restore gets a complete, faithful chronicle. Outage-window rows are legitimately absent (that is what fail-open *means*); the test asserts that absence is tolerated. | ✅ |
+| **D — Connection / pool kill** | `SELECT pg_terminate_backend(pid)` against the pool's and pg-boss's backends mid-batch, several rounds, then settle. | **Fail-open atomicity contract only** (the sole pg-bossier-specific signal): for every job, the chronicle holds **a complete row or no row — never a partial/orphan**; and capture **recovers** (a fresh `send → fetch → complete` after the storm is captured normally). **No** job-outcome, timing, or NOTIFY-completeness assertions — those test Postgres/pg-boss, not pg-bossier. Carries `test.retry(2)` to separate infra noise from real failures. | `BATTLE_CHAOS_FULL=1` |
 
 ## CI tiering
 
 A `develop`/PR gate must not be flaky. So:
 
-- **Default (`npm test`)** runs A, B, C, and the `sendAfter` part of E — all stable, ~30–60 s on top of the testcontainer.
-- **`BATTLE_CHAOS_FULL=1`** (nightly / manual / local) additionally runs D (connection kill) and real cron in E — invariant-only, slower, occasionally retried.
-
-Every monkey the user asked for is **built**. The flag governs only *where each runs*, keeping the gate green.
+- **Default (`npm test`)** runs A, B, C — all stable (the `sendAfter`-delayed shape is folded into A; it needs no wall-clock sleep beyond ~1 s and no `supervise`). ~30–60 s on top of the testcontainer.
+- **`BATTLE_CHAOS_FULL=1`** (nightly / manual / local) adds D (connection kill) — contract-scoped, `test.retry(2)`.
 
 ## Decisions locked
 
 ### 1. Fail-open break = rename the table, not drop the sequence
+Renaming `pgbossier.record` away makes the trigger's `INSERT … VALUES` fail on a missing relation — caught by the function's inner `EXCEPTION WHEN OTHERS`. Fully reversible (`RENAME` back) and it **preserves `seq` and existing rows**, so the global `seq` invariant still holds across the run. Dropping `record_seq` would reset `seq` to 1 and falsely trip the distinctness/advance invariant. Rename wins.
 
-Renaming `pgbossier.record` away makes the trigger's `INSERT … VALUES` fail on a missing relation — caught by the function's inner `EXCEPTION WHEN OTHERS`. Fully reversible (`RENAME` back) and it **preserves `seq` and existing rows**, so the global `seq`-monotonic invariant still holds across the whole run. Dropping `record_seq` would also break capture, but recreating it resets `seq` to 1 and would falsely trip the monotonicity assertion. Rename wins.
+### 2. Drivers apply the plan to the job they receive; never assume `fetch` identity
+The debate's linchpin. `fetch` returns an arbitrary available job under concurrency, so both push and pull decide outcome from the *received* job's `id` + `retryCount` (see Drivers). This is what makes per-job exact assertions achievable concurrently — without it, a per-job pull loop would complete/fail the wrong job and the oracle would be meaningless.
 
-### 2. Push path determinism via `job.retryCount`, not call ordering
+### 3. Transient DB errors are retried with read-back reconciliation
+Driver ops retry `40001` / lock-timeout / connection-reset / pool-exhaustion, reading back state before re-applying so an ambiguous commit can't double-fire. This keeps a transient error a *driver* hiccup rather than a changed *outcome* — the precondition under which Phase A's exact assertions are honest rather than flaky.
 
-The `work()` handler must produce a deterministic outcome without depending on poll timing. It looks up the job's plan and compares `job.retryCount` to the planned number of failures: `retryCount < plannedFails` → throw (pg-boss auto-retries/fails); else → return the planned output (pg-boss auto-completes). This makes the push path's chronicle exactly predictable even under the storm.
+### 4. Exact is per-`job_id`; cross-job is invariant-only
+Per-job own facts are interleaving-invariant and asserted exactly. Cross-job ordering, relative timestamps, and array position are nondeterministic under real concurrency and are **never** asserted. Cross-job structural facts (no dup PK, `seq` distinct + advancing) are invariants. This is the bounded form of the original "outcome-invariant" claim, corrected by R2.
 
-### 3. Unique `singletonKey` in the randomized body; dedup tested separately
+### 5. Events asserted via `getEventsSince` catch-up, not live delivery
+`pg_notify` delivery to a live `LISTEN` connection is best-effort and can drop under load. So the event assertion uses the durable `getEventsSince(seq)` catch-up read as the authority (every terminal job has a terminal event there); the live `subscribe()` path is exercised for smoke but not asserted for exact delivery.
 
-Singleton dedup means same-key sends collapse to one job — a `send` can return `null`. Threading that through the per-job oracle would complicate every assertion for a behavior that one dedicated mini-case covers cleanly. So the randomized body uses unique keys (exercising the captured `singleton_key` column), and dedup gets its own focused case.
+### 6. Connection-kill kept (gated), scoped to the fail-open contract; real cron cut
+Phase D's only pg-bossier-specific signal is the trigger's atomicity-under-transport-failure: a complete chronicle row or none, never a partial, plus recovery. That *is* pg-bossier's contract (the trigger fires inside pg-boss's transaction), so it's worth keeping — gated, contract-scoped, `test.retry(2)`. **Real cron is cut entirely**: a `* * * * *` tick needs a >60 s CI sleep (a "cardinal sin") and tests pg-boss's scheduler, not pg-bossier's chronicle. The `sendAfter`-delayed outcome variant covers the scheduled/delayed path with no sleep and no separate container.
 
-### 4. Cron on a separate container
-
-Phases A–D assert exact counts and rely on `supervise:false, schedule:false` (the reason `harness.ts` sets them today — maintenance and cron loops would insert jobs mid-test and flake `count(*)`). Real cron needs both on. Running it against a **fresh, isolated** harness keeps the deterministic phases deterministic.
-
-### 5. Exact vs invariant is a per-phase property, not a global mode
-
-Phase A is exact *because* it runs chaos-free with respect to the audit path. The moment a phase breaks the audit path (C), kills connections (D), or invites background inserts (E), the assertions drop to the documented invariants. The harness never claims exactness it can't honor.
+### 7. Keep `mulberry32`; do not adopt `fast-check`
+The only thing a property-based framework buys here is automatic shrinking. Our "input" is structured ~200-job semantic plans, which don't shrink cleanly with generic generators (risk of misleading minimized cases), and the persisted-failing-plan + fingerprint (Reproducibility) recovers ~90% of shrinking's value at this scale. Adding a dependency for the rest violates KISS / no-new-deps. Revisit only if repeated painful triage proves it pays.
 
 ## Out of scope (and why)
 
-- **Expiration / stalled-job enforcement** — needs `supervise` plus wall-clock timing; pg-bossier treats `expired` as a derived `terminal_detail` marker, not a pg-boss state. Could fold loosely into Phase E later if the trial asks for it; not built now.
-- **Real cron under the default gate** — 1-minute cron granularity can't be a fast gate; hence the `BATTLE_CHAOS_FULL` long-timeout path.
-- **Container kill / restart** — heavier than backend termination and mostly re-tests pg-boss's own durability, not pg-bossier's chronicle. Phase D's `pg_terminate_backend` is the proportionate connection-chaos monkey.
-- **A standalone soak/CLI runner** — the user chose the seeded-CI-test form. `BATTLE_N` is the scale lever for manual hammering; a separate runner is a follow-up only if soak runs become routine.
+- **Real cron / `* * * * *` ticks** — cut per Decision 6 (CI-sleep cardinal sin; tests pg-boss's scheduler). `sendAfter`-delayed covers the scheduled shape.
+- **Expiration / stalled-job enforcement** — needs `supervise` plus wall-clock timing; pg-bossier treats `expired` as a derived `terminal_detail` marker, not a pg-boss state. Not built now.
+- **Container kill / restart** — heavier than backend termination and mostly re-tests pg-boss's durability, not pg-bossier's chronicle. Phase D's `pg_terminate_backend` is the proportionate connection-chaos monkey.
+- **`fast-check` / property-based shrinking** — Decision 7.
+- **Benchmarking** — separate suite (`test/perf/chronicle-scale.bench.ts`); this is correctness-under-load.
+- **A standalone soak/CLI runner** — the user chose the seeded-CI-test form. `BATTLE_N` is the scale lever; a separate runner is a follow-up only if soak runs become routine.
 
 ## Verification
 
-`npm run lint && npm run build && npm test` must pass (default tier). A separate manual run of `BATTLE_CHAOS_FULL=1 npm test` exercises the full monkey suite. Report actual output; never claim green on red.
+`npm run lint && npm run build && npm test` must pass (default tier: A, B, C). A separate manual run of `BATTLE_CHAOS_FULL=1 npm test` exercises Phase D. Report actual output; never claim green on red.
