@@ -13,6 +13,7 @@ import {
   type JobRecord, type JobState, type JobFilter, type ListJobsOpts,
 } from './read.js';
 import { subscribeEvents, type BossierEvents, type SubscribeOptions } from './events.js';
+import { getLiveState, getLiveHeartbeat, type LiveState } from './live.js';
 import { resolveSchemas, type SchemaNames } from './sql.js';
 import { pgBossDb, type BossierDb } from './db.js';
 
@@ -143,6 +144,14 @@ export interface BossierMethods {
   getEventsSince: <TInput = unknown, TOutput = unknown>(
     since: bigint, limit?: number,
   ) => Promise<JobRecord<TInput, TOutput>[]>;
+  /**
+   * A job's current LIVE runtime state from pg-boss (heartbeat, expiry, …) with
+   * provenance (`livePresent` / `liveReadAt` / `recordState`). Non-forensic —
+   * "what pg-boss says now", not history. `null` if the job is unknown.
+   */
+  getLiveState: <T = unknown>(jobId: string) => Promise<LiveState<T> | null>;
+  /** A job's live heartbeat timestamp from pg-boss, or `null` if no live row exists. */
+  getLiveHeartbeat: (jobId: string) => Promise<Date | null>;
 }
 
 /**
@@ -169,6 +178,7 @@ export const BOSSIER_METHOD_NAMES = [
   'setProgress', 'getProgress',
   'recordInputSnapshot', 'getInputSnapshot',
   'subscribeEvents', 'getEventsSince',
+  'getLiveState', 'getLiveHeartbeat',
 ] as const satisfies readonly (keyof BossierMethods)[];
 
 /** `subscribeEvents` needs a real pg connection an ORM adapter can't provide. */
@@ -233,6 +243,8 @@ export function bossier(options: BossierOptions): Bossier {
     getEventsSince: <TInput = unknown, TOutput = unknown>(
       since: bigint, limit?: number,
     ) => getEventsSince<TInput, TOutput>(db, s, since, limit),
+    getLiveState: <T = unknown>(jobId: string) => getLiveState<T>(boss, db, s, jobId),
+    getLiveHeartbeat: (jobId) => getLiveHeartbeat(boss, db, s, jobId),
   };
   const methodNames = new Set<string>(BOSSIER_METHOD_NAMES);
 
