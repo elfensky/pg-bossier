@@ -350,8 +350,8 @@ export async function waitForDrain(
   let stable = 0;
   while (Date.now() - start < deadlineMs) {
     const { rows } = await pool.query<{ n: string }>(
-      `SELECT count(*)::text AS n FROM ${schemas.pgbossier}.record
-       WHERE queue = ANY($1) AND state IN ('created', 'active')`,
+      `SELECT count(*)::text AS n FROM ${schemas.pgboss}.job
+       WHERE name = ANY($1) AND state IN ('created', 'retry', 'active')`,
       [queues],
     );
     if (rows[0]!.n === '0') {
@@ -372,6 +372,37 @@ export async function collectAllRows(
     [queues],
   );
   return rows.map((r) => ({ jobId: r.job_id, attempt: r.attempt, seq: BigInt(r.seq) }));
+}
+
+export async function assertEventsCatchUp(
+  client: Bossier,
+  byId: Map<string, PlannedJob>,
+): Promise<void> {
+  // getEventsSince is the authority — live NOTIFY delivery is best-effort and
+  // not asserted (spec Decision 5). Fresh container → all rows are ours.
+  const evs = await client.getEventsSince(0n, 1_000_000);
+  // strictly ascending seq
+  for (let i = 1; i < evs.length; i++) {
+    if (!(evs[i]!.seq > evs[i - 1]!.seq)) {
+      throw new Error(`battle: getEventsSince seq not ascending at index ${i}`);
+    }
+  }
+  // every job has a terminal-state row in the catch-up stream
+  const terminalById = new Map<string, string>();
+  for (const e of evs) {
+    if (e.state === 'completed' || e.state === 'failed' || e.state === 'cancelled') {
+      terminalById.set(e.jobId, e.state);
+    }
+  }
+  const missing: string[] = [];
+  for (const [id, plan] of byId) {
+    if (terminalById.get(id) !== plan.expectedTerminalState) {
+      missing.push(`${id} (${plan.key}): want ${plan.expectedTerminalState}, got ${terminalById.get(id) ?? 'NONE'}`);
+    }
+  }
+  if (missing.length) {
+    throw new Error(`battle: events catch-up missing terminal rows:\n  ${missing.join('\n  ')}`);
+  }
 }
 
 export async function assertWorkload(
