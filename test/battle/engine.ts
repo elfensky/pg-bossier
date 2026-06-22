@@ -156,3 +156,74 @@ export function isTransientError(err: unknown): boolean {
   return typeof msg === 'string'
     && /terminat|reset by peer|ECONNRESET|connection (closed|ended|refused|terminated)/i.test(msg);
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Oracle comparison core (pure). Per-job-id facts are exact; the integration
+// layer feeds DB rows in. Cross-job ordering/timestamps are NEVER compared
+// (spec Decision 4).
+// ──────────────────────────────────────────────────────────────────────────
+export interface PerAttempt {
+  attempt: number;
+  state: JobState;
+  priority: number | null;
+  retryLimit: number | null;
+  singletonKey: string | null;
+  dataJson: string;
+}
+
+export function diffChronicle(rows: PerAttempt[], plan: PlannedJob): string[] {
+  const errs: string[] = [];
+  if (rows.length !== plan.expectedAttempts) {
+    errs.push(`attempts: expected ${plan.expectedAttempts}, got ${rows.length}`);
+  }
+  for (let i = 0; i < plan.expectedAttemptStates.length; i++) {
+    const want = plan.expectedAttemptStates[i];
+    const got = rows[i]?.state;
+    if (got !== want) errs.push(`attempt[${i}] state: expected ${want}, got ${got ?? 'MISSING'}`);
+  }
+  const first = rows[0];
+  if (first) {
+    const wantData = JSON.stringify({ key: plan.key });
+    if (first.dataJson !== wantData) errs.push(`data: expected ${wantData}, got ${first.dataJson}`);
+    if (first.priority !== plan.priority) errs.push(`priority: expected ${plan.priority}, got ${first.priority}`);
+    if (first.retryLimit !== plan.retryLimit) errs.push(`retryLimit: expected ${plan.retryLimit}, got ${first.retryLimit}`);
+    if (first.singletonKey !== plan.singletonKey) errs.push(`singletonKey: expected ${plan.singletonKey}, got ${first.singletonKey}`);
+  }
+  return errs;
+}
+
+export function findGlobalViolations(rows: { jobId: string; attempt: number; seq: bigint }[]): string[] {
+  const errs: string[] = [];
+  const pk = new Set<string>();
+  let dupPk = 0;
+  for (const r of rows) {
+    const k = `${r.jobId}#${r.attempt}`;
+    if (pk.has(k)) dupPk++;
+    pk.add(k);
+  }
+  if (dupPk > 0) errs.push(`dup PK: ${dupPk} duplicate (job_id, attempt) row(s)`);
+
+  const seqSet = new Set(rows.map((r) => r.seq.toString()));
+  if (seqSet.size !== rows.length) {
+    errs.push(`seq not distinct: ${rows.length - seqSet.size} collision(s)`);
+  }
+  return errs;
+}
+
+export interface RunInfo {
+  seed: number;
+  n: number;
+  workers: number;
+  phase: string;
+}
+
+export function fingerprint(info: RunInfo, jobId: string, plan: PlannedJob, errs: string[]): string {
+  return [
+    `BATTLE FAILURE [phase=${info.phase}]`,
+    `  seed=${info.seed} n=${info.n} workers=${info.workers}`,
+    `  jobId=${jobId} key=${plan.key} queue=${plan.queue} pattern=${plan.pattern}`,
+    `  outcome=${plan.outcome} retryLimit=${plan.retryLimit} plannedFails=${plan.plannedFails} delaySeconds=${plan.delaySeconds}`,
+    `  replay: BATTLE_SEED=${info.seed} BATTLE_ONLY_JOB=${jobId} npx vitest run test/battle/battle.test.ts`,
+    ...errs.map((e) => `  ✗ ${e}`),
+  ].join('\n');
+}

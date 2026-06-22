@@ -1,5 +1,18 @@
 import { test, expect } from 'vitest';
-import { mulberry32, makeRng } from './engine.js';
+import {
+  mulberry32,
+  makeRng,
+  planWorkload,
+  decideAction,
+  isTransientError,
+  diffChronicle,
+  findGlobalViolations,
+  fingerprint,
+  type QueueDef,
+  type PlannedJob,
+  type PerAttempt,
+  type RunInfo,
+} from './engine.js';
 
 test('mulberry32 is deterministic for a seed and varies by seed', () => {
   const a = mulberry32(42);
@@ -32,8 +45,6 @@ test('makeRng.chance honors the 0 and 1 boundaries', () => {
     expect(rng.chance(1)).toBe(true);  // r() < 1 always true ([0,1) range)
   }
 });
-
-import { planWorkload, type QueueDef, type PlannedJob } from './engine.js';
 
 const QS: QueueDef[] = [
   { name: 'p1', pattern: 'push' },
@@ -74,8 +85,6 @@ test('every planned job is internally consistent', () => {
   }
 });
 
-import { decideAction, isTransientError } from './engine.js';
-
 test('decideAction fails the planned-fail attempts then completes', () => {
   const plan = planWorkload(makeRng(5), { n: 1, queues: QS })[0]!;
   // Synthesise a known plan instead of relying on the random one:
@@ -94,4 +103,61 @@ test('isTransientError classifies retryable Postgres/connection errors', () => {
   expect(isTransientError(new Error('Connection terminated unexpectedly'))).toBe(true);
   expect(isTransientError({ code: '23505' })).toBe(false); // unique_violation — real bug
   expect(isTransientError(new Error('boom'))).toBe(false);
+});
+
+function faithfulRows(plan: PlannedJob): PerAttempt[] {
+  return plan.expectedAttemptStates.map((state, attempt) => ({
+    attempt,
+    state,
+    priority: attempt === 0 ? plan.priority : null,
+    retryLimit: attempt === 0 ? plan.retryLimit : null,
+    singletonKey: attempt === 0 ? plan.singletonKey : null,
+    dataJson: JSON.stringify({ key: plan.key }),
+  }));
+}
+
+test('diffChronicle returns no errors for a faithful chronicle', () => {
+  const jobs = planWorkload(makeRng(321), { n: 100, queues: QS });
+  for (const plan of jobs) {
+    expect(diffChronicle(faithfulRows(plan), plan)).toEqual([]);
+  }
+});
+
+test('diffChronicle catches a wrong terminal state, wrong count, and wrong config', () => {
+  const plan = planWorkload(makeRng(1), { n: 1, queues: QS })[0]!;
+  const p: PlannedJob = {
+    ...plan, outcome: 'retryThenComplete', retryLimit: 2, plannedFails: 1,
+    expectedAttempts: 2, expectedTerminalState: 'completed',
+    expectedAttemptStates: ['retry', 'completed'],
+  };
+  // Drop the final attempt and corrupt config → multiple diffs.
+  const broken: PerAttempt[] = [
+    { attempt: 0, state: 'retry', priority: 999, retryLimit: 2, singletonKey: p.singletonKey, dataJson: JSON.stringify({ key: p.key }) },
+  ];
+  const errs = diffChronicle(broken, p);
+  expect(errs.some((e) => /attempts:/.test(e))).toBe(true);
+  expect(errs.some((e) => /priority:/.test(e))).toBe(true);
+});
+
+test('findGlobalViolations flags duplicate PK and non-distinct seq', () => {
+  expect(findGlobalViolations([
+    { jobId: 'a', attempt: 0, seq: 1n },
+    { jobId: 'a', attempt: 1, seq: 2n },
+  ])).toEqual([]);
+  const bad = findGlobalViolations([
+    { jobId: 'a', attempt: 0, seq: 1n },
+    { jobId: 'a', attempt: 0, seq: 1n },
+  ]);
+  expect(bad.some((e) => /dup PK/.test(e))).toBe(true);
+  expect(bad.some((e) => /seq not distinct/.test(e))).toBe(true);
+});
+
+test('fingerprint includes seed, jobId, replay hint, and each error', () => {
+  const plan = planWorkload(makeRng(2), { n: 1, queues: QS })[0]!;
+  const info: RunInfo = { seed: 0xc0ffee, n: 200, workers: 5, phase: 'A' };
+  const fp = fingerprint(info, 'job-123', plan, ['attempts: expected 2, got 1']);
+  expect(fp).toContain('12648430'); // 0xc0ffee
+  expect(fp).toContain('job-123');
+  expect(fp).toContain('BATTLE_ONLY_JOB=job-123');
+  expect(fp).toContain('attempts: expected 2, got 1');
 });
