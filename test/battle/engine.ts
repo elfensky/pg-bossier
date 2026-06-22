@@ -405,6 +405,32 @@ export async function assertEventsCatchUp(
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Chaos injectors.
+// ──────────────────────────────────────────────────────────────────────────
+export async function forensicDelete(
+  pool: Pool, schemas: SchemaNames, jobIds: readonly string[],
+): Promise<number> {
+  const { rowCount } = await pool.query(
+    `DELETE FROM ${schemas.pgboss}.job WHERE id = ANY($1)`, [jobIds],
+  );
+  return rowCount ?? 0;
+}
+
+export async function withAuditOutage<T>(
+  pool: Pool, schemas: SchemaNames, fn: () => Promise<T>,
+): Promise<T> {
+  // Rename the chronicle table away → the trigger's INSERT fails on a missing
+  // relation and is swallowed by its EXCEPTION WHEN OTHERS (fail-open). seq and
+  // rows are preserved (spec Decision 1).
+  await pool.query(`ALTER TABLE ${schemas.pgbossier}.record RENAME TO record__chaos`);
+  try {
+    return await fn();
+  } finally {
+    await pool.query(`ALTER TABLE ${schemas.pgbossier}.record__chaos RENAME TO record`);
+  }
+}
+
 export async function assertWorkload(
   client: Bossier,
   pool: Pool,

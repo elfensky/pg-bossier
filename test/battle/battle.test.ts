@@ -60,3 +60,63 @@ test('Phase A — concurrency storm: per-job chronicle is faithful', async () =>
     { seed: SEED, n: N, workers: WORKERS, phase: 'A' });
   await battle.assertEventsCatchUp(client, byId);
 }, 180_000);
+
+test('Phase B — forensic survival after pgboss.job rows are deleted', async () => {
+  expect(byId.size).toBeGreaterThan(0); // depends on Phase A having run
+  // Sample up to 20 completed jobs from the workload.
+  const sample = [...byId.entries()]
+    .filter(([, p]) => p.expectedTerminalState === 'completed')
+    .slice(0, 20)
+    .map(([id]) => id);
+  expect(sample.length).toBeGreaterThan(0);
+
+  const deleted = await battle.forensicDelete(h.pool, SCHEMAS, sample);
+  expect(deleted).toBe(sample.length);
+
+  for (const id of sample) {
+    const job = await client.findById(id);
+    expect(job, `findById(${id}) after delete`).not.toBeNull();
+    const plan = byId.get(id)!;
+    const hist = await client.getRetryHistory(id);
+    expect(hist).toHaveLength(plan.expectedAttempts);
+    expect(hist.at(-1)!.state).toBe('completed');
+    expect(hist[0]!.data).toEqual({ key: plan.key });
+  }
+}, 60_000);
+
+test('Phase C — fail-open: pg-boss ops never block while the audit path is broken', async () => {
+  const q = 'battle-failopen';
+  await h.boss.createQueue(q);
+
+  // During the outage, drive a batch end-to-end and assert NOTHING throws.
+  const outageIds = await battle.withAuditOutage(h.pool, SCHEMAS, async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 15; i++) {
+      const id = await h.boss.send(q, { key: `outage-${i}` });
+      ids.push(id!);
+    }
+    for (const id of ids) {
+      const fetched = await h.boss.fetch(q);
+      expect(fetched && fetched.length).toBeTruthy();
+    }
+    // complete whatever is active (fetch returns arbitrary order)
+    let drained = 0;
+    while (drained < ids.length) {
+      const batch = await h.boss.fetch(q, { batchSize: 20 });
+      if (!batch || batch.length === 0) break;
+      for (const j of batch) { await h.boss.complete(q, j.id, { ok: true }); drained++; }
+    }
+    return ids;
+  });
+  expect(outageIds).toHaveLength(15);
+
+  // After restore, a fresh job gets a complete, faithful chronicle (recovery).
+  const freshId = await h.boss.send(q, { key: 'after-restore' });
+  const got = await h.boss.fetch(q);
+  expect(got && got.length).toBeTruthy();
+  await h.boss.complete(q, freshId!, { ok: true });
+
+  const hist = await client.getRetryHistory(freshId!);
+  expect(hist.at(-1)!.state).toBe('completed');
+  expect(hist[0]!.data).toEqual({ key: 'after-restore' });
+}, 60_000);
