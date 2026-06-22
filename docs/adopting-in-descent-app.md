@@ -1,5 +1,7 @@
 # Adopting pg-bossier in descent-app (v0.1.0 trial)
 
+> **Updated 2026-06-23 (post-reposition, on `develop` — newer than `v0.1.0`).** Three changes affect this guide: (1) the lifecycle subscription is now **`subscribeEvents()`** (renamed from `subscribe` so it no longer shadows pg-boss's pub/sub `subscribe`); (2) the residual raw `heartbeat_on` lookup is **no longer needed** — `client.getLiveState(jobId)` / `getLiveHeartbeat(jobId)` read it (and live expiry/state) via a typed method; (3) `bossier()`'s `pool` is now **optional** (reads/writes route through pg-boss's own connection), though `subscribeEvents` and `install` still need one. See CLAUDE.md § "General-purpose reposition".
+
 This is the step-by-step for the descent-app validation trial — the gate before pg-bossier's first npm publish. pg-bossier is a **queue-mechanics** layer on top of pg-boss (permanent history, retry/progress/failure detail, events). It is **not** a domain audit store — descent-app's own audit-trail table owns provenance ("which job + inputs → which result", user actions, etc.).
 
 ## 1. Install (git URL — not on npm yet)

@@ -23,10 +23,16 @@ pg-bossier is nine concrete capabilities — the goals tracked in [issue #1](htt
 | **pg-boss compatibility contract** | A documented tier system naming which pg-boss surfaces pg-bossier depends on and how stable each is. | ✅ |
 | **Typed failure detail** | A structured, queryable reason for every finished job — with a temporary-vs-permanent label on failures. | ✅ |
 | **Input snapshots** | An optional slot to record what data a job saw when it ran, so its inputs stay recoverable. | ✅ |
-| **Mid-job progress** | A progress value a worker updates while a job runs, surviving crashes and retries. | 🟡 |
-| **Lifecycle events** | Subscribe to job state changes as they happen, instead of polling for them. | ⬜ |
+| **Mid-job progress** | A progress value a worker updates while a job runs, surviving crashes and retries. | ✅ |
+| **Lifecycle events** | Subscribe to job state changes as they happen (`subscribeEvents`), instead of polling for them. | ✅ |
 
-🟡 capabilities are partly usable now — the storage that backs them works today, while their typed APIs are still being designed.
+Plus, since the 2026-06-23 general-purpose reposition (see [CLAUDE.md § General-purpose reposition](./CLAUDE.md)):
+
+| Capability | What you get | Status |
+| --- | --- | --- |
+| **Bring-your-own connection** | Reads and writes run through pg-boss's own DB handle — no separate `pg.Pool` needed when pg-boss is wired to a Prisma/Knex/Kysely/Drizzle adapter. | ✅ |
+| **Live runtime state** | `getLiveState` / `getLiveHeartbeat` read pg-boss's *current* heartbeat / expiry / state without dropping to raw `pgboss.job` SQL. | ✅ |
+| **One import for everything** | pg-boss's `PgBoss` class, its ORM adapters and all its types are re-exported from `pg-bossier`, alongside pg-bossier's own API. | ✅ |
 
 ## How it works
 
@@ -190,6 +196,35 @@ const client = bossier({ boss, pool });
 
 await client.createQueue('email');
 await client.send('email', { to: 'user@example.com' });
+```
+
+**Bring your own connection.** The `pool` above is **optional** for the client. Omit it and pg-bossier runs its reads and writes through pg-boss's *own* DB handle (`boss.getDb()`) — so when pg-boss is wired to an ORM adapter you never hand pg-bossier a separate `pg.Pool`:
+
+```ts
+import { PgBoss, bossier, fromPrisma } from 'pg-bossier'; // everything from one package
+const boss = new PgBoss({ db: fromPrisma(prisma) });
+await boss.start();
+const client = bossier({ boss }); // reads/writes go through Prisma's connection
+```
+
+Two paths still need a real connection: `subscribeEvents` (LISTEN/NOTIFY) and `install` / `uninstall` (transactional DDL) — pass a `pool` for those (the CLI installer makes its own).
+
+**One import for everything.** `pg-bossier` re-exports pg-boss's whole surface, so `import { PgBoss, bossier, fromPrisma, getLiveState, type JobWithMetadata } from 'pg-bossier'` all resolve from the one package.
+
+### Live runtime state
+
+`getLiveState(jobId)` reads what pg-boss knows about a job *right now* (heartbeat, expiry, current state) — closing the gap that used to force a raw `pgboss.job` query. It's deliberately **non-forensic**: once pg-boss deletes the row on completion, the live fields are gone (use the history methods below for the durable record). `recordState` lets you tell a finished job from a brief retry transition:
+
+```ts
+const live = await client.getLiveState(jobId);
+if (live?.livePresent) {
+  console.log('last heartbeat:', live.job!.heartbeatOn);
+} else if (live && ['active', 'retry', 'created'].includes(live.recordState ?? '')) {
+  // No live row, but the record says it's mid-flight — a brief retry DELETE+INSERT
+  // gap, not "gone". Don't render "not found".
+} // else: genuinely done (completed/failed/cancelled), or unknown (live === null)
+
+const beat = await client.getLiveHeartbeat(jobId); // Date | null
 ```
 
 ### Reading job history
@@ -481,13 +516,13 @@ import type { ProgressResult } from 'pg-bossier';
 
 ### Lifecycle events (Goal 7)
 
-Subscribe to job state transitions instead of polling:
+Subscribe to job state transitions instead of polling. The method is `subscribeEvents()` — named so it never shadows pg-boss's own pub/sub `subscribe(event, name)`, which stays reachable on the same client. It requires a `pool` (LISTEN/NOTIFY needs a dedicated connection):
 
 ```ts
 import { bossier } from 'pg-bossier';
 
-const client = bossier({ boss, pool });
-const events = await client.subscribe();
+const client = bossier({ boss, pool });        // `pool` required for events
+const events = await client.subscribeEvents();
 let lastSeq = 0n;
 
 events.on('connected', () => console.log('event stream live'));
