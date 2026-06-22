@@ -145,7 +145,7 @@ const TRANSIENT_CODES = new Set([
   '55P03', // lock_not_available
   '57014', // query_canceled
   '57P01', // admin_shutdown (pg_terminate_backend)
-  '08000', '08003', '08006', // connection exceptions
+  '08000', '08001', '08003', '08004', '08006', '08007', // connection exceptions (08xxx)
   '53300', // too_many_connections
 ]);
 
