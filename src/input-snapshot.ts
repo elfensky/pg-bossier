@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { BossierDb } from './db.js';
 import { UUID_RE, type SchemaNames } from './sql.js';
 import { stringifyOrThrow } from './json.js';
 
@@ -34,7 +34,7 @@ export interface InputSnapshotResult<T = unknown> {
  * return the nulled field rather than the number the caller passed.
  */
 export async function recordInputSnapshot(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   jobId: string,
   attempt: number,
@@ -52,7 +52,7 @@ export async function recordInputSnapshot(
   }
   const json = stringifyOrThrow(snapshot, 'input_snapshot');
   try {
-    const { rowCount } = await pool.query(
+    const { rowCount } = await db.query(
       `UPDATE ${schemas.pgbossier}.record
           SET input_snapshot = $3::jsonb
         WHERE job_id = $1 AND attempt = $2`,
@@ -85,20 +85,20 @@ export async function recordInputSnapshot(
  * (matches `src/progress.ts`'s pattern).
  */
 export async function getInputSnapshot<T = unknown>(
-  pool: Pool, schemas: SchemaNames, jobId: string, attempt: number,
+  db: BossierDb, schemas: SchemaNames, jobId: string, attempt: number,
 ): Promise<T | null>;
 export async function getInputSnapshot<T = unknown>(
-  pool: Pool, schemas: SchemaNames, jobId: string,
+  db: BossierDb, schemas: SchemaNames, jobId: string,
 ): Promise<InputSnapshotResult<T> | null>;
 export async function getInputSnapshot<T = unknown>(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   jobId: string,
   attempt?: number,
 ): Promise<T | InputSnapshotResult<T> | null> {
   if (!UUID_RE.test(jobId)) return null;
   if (attempt !== undefined) {
-    const { rows } = await pool.query<{ snapshot: unknown }>(
+    const { rows } = await db.query<{ snapshot: unknown }>(
       `SELECT input_snapshot AS snapshot
          FROM ${schemas.pgbossier}.record
         WHERE job_id = $1 AND attempt = $2
@@ -109,7 +109,7 @@ export async function getInputSnapshot<T = unknown>(
     if (!row || row.snapshot === null) return null;
     return row.snapshot as T;
   }
-  const { rows } = await pool.query<{ snapshot: unknown; attempt: number }>(
+  const { rows } = await db.query<{ snapshot: unknown; attempt: number }>(
     `SELECT input_snapshot AS snapshot, attempt
        FROM ${schemas.pgbossier}.record
       WHERE job_id = $1 AND input_snapshot IS NOT NULL

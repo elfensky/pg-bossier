@@ -14,10 +14,26 @@ import {
 } from './read.js';
 import { subscribeEvents, type BossierEvents, type SubscribeOptions } from './events.js';
 import { resolveSchemas, type SchemaNames } from './sql.js';
+import { pgBossDb, type BossierDb } from './db.js';
 
 export interface BossierOptions {
   boss: PgBoss;
-  pool: Pool;
+  /**
+   * A pg `Pool`. **Optional.** When omitted, pg-bossier's read/write methods
+   * run through pg-boss's own DB handle (`boss.getDb()`) — so a consumer using
+   * pg-boss with a Prisma/Knex/Kysely/Drizzle adapter never has to hand
+   * pg-bossier a separate connection. A `pool` (or `db`) is still **required
+   * for `subscribeEvents`** (LISTEN/NOTIFY needs a dedicated pg connection that
+   * ORM adapters don't expose).
+   */
+  pool?: Pool;
+  /**
+   * An explicit query surface for pg-bossier's reads/writes, overriding the
+   * default (`pool`, else `boss.getDb()`). Rarely needed — pass your own pg-boss
+   * adapter (`fromPrisma`/`fromKnex`/…) here only if it differs from the one
+   * `boss` was constructed with.
+   */
+  db?: BossierDb;
   /** Where pg-bossier's own objects live. Default: 'pgbossier'. */
   schema?: string;
   /** Where pg-boss installed itself. Default: 'pgboss'. */
@@ -118,6 +134,9 @@ export interface BossierMethods {
    * `subscribe`) so it never shadows pg-boss's own pub/sub `subscribe(event,
    * name)` — that method stays reachable through the proxy. See the
    * collision-guard test in `test/client.test.ts`.
+   *
+   * Requires the client to have been built with a `pool` (LISTEN/NOTIFY needs a
+   * dedicated pg connection); throws a clear error otherwise.
    */
   subscribeEvents: (opts?: SubscribeOptions) => Promise<BossierEvents>;
   /** Read pgbossier.record rows with seq > since, ordered ascending. */
@@ -152,6 +171,12 @@ export const BOSSIER_METHOD_NAMES = [
   'subscribeEvents', 'getEventsSince',
 ] as const satisfies readonly (keyof BossierMethods)[];
 
+/** `subscribeEvents` needs a real pg connection an ORM adapter can't provide. */
+const SUBSCRIBE_EVENTS_NEEDS_POOL =
+  'pgbossier: subscribeEvents requires a `pool` — LISTEN/NOTIFY needs a ' +
+  'dedicated pg connection that ORM adapters do not expose. Construct the ' +
+  'client as bossier({ boss, pool }).';
+
 /**
  * Wrap a started pg-boss instance into a single client that exposes pg-boss's
  * whole API alongside pg-bossier's methods.
@@ -164,6 +189,10 @@ export const BOSSIER_METHOD_NAMES = [
  */
 export function bossier(options: BossierOptions): Bossier {
   const { boss, pool } = options;
+  // Reads/writes go through `db`: an explicit adapter, else the caller's pool,
+  // else pg-boss's own DB handle (so no separate pool is required). LISTEN/
+  // NOTIFY (`subscribeEvents`) still needs a real `pool` — see requirePool.
+  const db: BossierDb = options.db ?? pool ?? pgBossDb(boss);
   const s: SchemaNames = resolveSchemas({
     pgbossier: options.schema,
     pgboss:    options.pgbossSchema,
@@ -171,36 +200,39 @@ export function bossier(options: BossierOptions): Bossier {
 
   const methods: BossierMethods = {
     recordTerminalDetail: (jobId, attempt, payload) =>
-      recordTerminalDetail(pool, s, jobId, attempt, payload),
-    recordDeadLetter: (args) => recordDeadLetter(pool, s, args),
-    findDeadLetterSource: (dlqJobId) => findDeadLetterSource(pool, s, dlqJobId),
-    findDeadLetterTarget: (sourceJobId) => findDeadLetterTarget(pool, s, sourceJobId),
+      recordTerminalDetail(db, s, jobId, attempt, payload),
+    recordDeadLetter: (args) => recordDeadLetter(db, s, args),
+    findDeadLetterSource: (dlqJobId) => findDeadLetterSource(db, s, dlqJobId),
+    findDeadLetterTarget: (sourceJobId) => findDeadLetterTarget(db, s, sourceJobId),
     findById: <TInput = unknown, TOutput = unknown>(jobId: string) =>
-      findById<TInput, TOutput>(pool, s, jobId),
+      findById<TInput, TOutput>(db, s, jobId),
     getRetryHistory: <TInput = unknown, TOutput = unknown>(jobId: string) =>
-      getRetryHistory<TInput, TOutput>(pool, s, jobId),
+      getRetryHistory<TInput, TOutput>(db, s, jobId),
     listJobs: <TInput = unknown, TOutput = unknown>(opts?: ListJobsOpts) =>
-      listJobs<TInput, TOutput>(pool, s, opts),
-    latestPerQueue: (queues, opts) => latestPerQueue(pool, s, queues, opts),
-    countByState: (filter) => countByState(pool, s, filter),
-    countByQueue: (filter) => countByQueue(pool, s, filter),
-    listLongRunning: (opts) => listLongRunning(pool, s, opts),
-    setProgress: (jobId, progress) => setProgress(pool, s, jobId, progress),
+      listJobs<TInput, TOutput>(db, s, opts),
+    latestPerQueue: (queues, opts) => latestPerQueue(db, s, queues, opts),
+    countByState: (filter) => countByState(db, s, filter),
+    countByQueue: (filter) => countByQueue(db, s, filter),
+    listLongRunning: (opts) => listLongRunning(db, s, opts),
+    setProgress: (jobId, progress) => setProgress(db, s, jobId, progress),
     getProgress: <TProgress = unknown>(jobId: string) =>
-      getProgress<TProgress>(pool, s, jobId),
+      getProgress<TProgress>(db, s, jobId),
     recordInputSnapshot: (jobId, attempt, snapshot) =>
-      recordInputSnapshot(pool, s, jobId, attempt, snapshot),
+      recordInputSnapshot(db, s, jobId, attempt, snapshot),
     // Overloaded: dispatch at the call site to land on each of the underlying
     // free function's two public overloads. `attempt === undefined` → the
     // wrapped-result overload; otherwise → the `T | null` overload.
     getInputSnapshot: <T = unknown>(jobId: string, attempt?: number) =>
       attempt === undefined
-        ? getInputSnapshot<T>(pool, s, jobId)
-        : getInputSnapshot<T>(pool, s, jobId, attempt),
-    subscribeEvents: (opts) => subscribeEvents(pool, s, opts),
+        ? getInputSnapshot<T>(db, s, jobId)
+        : getInputSnapshot<T>(db, s, jobId, attempt),
+    subscribeEvents: (opts) =>
+      pool === undefined
+        ? Promise.reject(new Error(SUBSCRIBE_EVENTS_NEEDS_POOL))
+        : subscribeEvents(pool, s, opts),
     getEventsSince: <TInput = unknown, TOutput = unknown>(
       since: bigint, limit?: number,
-    ) => getEventsSince<TInput, TOutput>(pool, s, since, limit),
+    ) => getEventsSince<TInput, TOutput>(db, s, since, limit),
   };
   const methodNames = new Set<string>(BOSSIER_METHOD_NAMES);
 

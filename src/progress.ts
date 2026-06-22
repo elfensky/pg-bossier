@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { BossierDb } from './db.js';
 import { stringifyOrThrow } from './json.js';
 import { UUID_RE } from './sql.js';
 import type { SchemaNames } from './sql.js';
@@ -27,14 +27,14 @@ export interface ProgressResult<TProgress = unknown> {
  * `{ progress: null, attempt }` rather than the number the caller passed.
  */
 export async function setProgress(
-  pool: Pool, schemas: SchemaNames, jobId: string, progress: unknown,
+  db: BossierDb, schemas: SchemaNames, jobId: string, progress: unknown,
 ): Promise<void> {
   if (progress === undefined || progress === null) {
     throw new Error('pg-bossier: progress validation: progress must not be null or undefined');
   }
   const json = stringifyOrThrow(progress, 'progress');
   try {
-    const { rowCount } = await pool.query(
+    const { rowCount } = await db.query(
       `UPDATE ${schemas.pgbossier}.record
          SET progress = $2::jsonb
        WHERE job_id = $1
@@ -61,10 +61,10 @@ export async function setProgress(
  * (non-UUID) `jobId` short-circuits to `null` without a query.
  */
 export async function getProgress<TProgress = unknown>(
-  pool: Pool, schemas: SchemaNames, jobId: string,
+  db: BossierDb, schemas: SchemaNames, jobId: string,
 ): Promise<ProgressResult<TProgress> | null> {
   if (!UUID_RE.test(jobId)) return null;
-  const { rows } = await pool.query<{ progress: unknown; attempt: number }>(
+  const { rows } = await db.query<{ progress: unknown; attempt: number }>(
     `SELECT progress, attempt FROM ${schemas.pgbossier}.record
      WHERE job_id = $1 AND progress IS NOT NULL
      ORDER BY attempt DESC

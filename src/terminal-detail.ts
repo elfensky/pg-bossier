@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { BossierDb } from './db.js';
 import { stringifyOrThrow } from './json.js';
 import type { SchemaNames } from './sql.js';
 
@@ -74,7 +74,7 @@ function allowedStates(state: TerminalDetail['state']): string[] {
  * `recordTerminalDetail` is the *sole* writer for `pgbossier.record.terminal_detail`.
  */
 export async function recordTerminalDetail(
-  pool: Pool,
+  db: BossierDb,
   schemas: SchemaNames,
   jobId: string,
   attempt: number,
@@ -95,7 +95,7 @@ export async function recordTerminalDetail(
   }
   const json = stringifyOrThrow(payload.detail, 'terminal_detail');
   const states = allowedStates(payload.state);
-  await pool.query(
+  await db.query(
     `UPDATE ${schemas.pgbossier}.record
         SET terminal_detail = COALESCE(terminal_detail, '{}'::jsonb) || $4::jsonb
       WHERE job_id = $1
