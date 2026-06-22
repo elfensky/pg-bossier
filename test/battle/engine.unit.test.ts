@@ -32,3 +32,44 @@ test('makeRng.chance honors the 0 and 1 boundaries', () => {
     expect(rng.chance(1)).toBe(true);  // r() < 1 always true ([0,1) range)
   }
 });
+
+import { planWorkload, type QueueDef, type PlannedJob } from './engine.js';
+
+const QS: QueueDef[] = [
+  { name: 'p1', pattern: 'push' },
+  { name: 'l1', pattern: 'pull' },
+];
+
+test('planWorkload is deterministic for a seed', () => {
+  const a = planWorkload(makeRng(99), { n: 50, queues: QS });
+  const b = planWorkload(makeRng(99), { n: 50, queues: QS });
+  expect(a).toEqual(b);
+  expect(a).toHaveLength(50);
+});
+
+test('every planned job is internally consistent', () => {
+  const jobs = planWorkload(makeRng(1234), { n: 400, queues: QS });
+  for (const j of jobs) {
+    expect(j.expectedAttemptStates).toHaveLength(j.expectedAttempts);
+    expect(j.expectedAttemptStates.at(-1)).toBe(j.expectedTerminalState);
+    expect(j.pattern).toBe(QS.find((q) => q.name === j.queue)!.pattern);
+    if (j.outcome === 'complete') {
+      expect(j).toMatchObject({ plannedFails: 0, expectedAttempts: 1, expectedTerminalState: 'completed' });
+    }
+    if (j.outcome === 'cancel') {
+      expect(j).toMatchObject({ plannedFails: 0, expectedAttempts: 1, expectedTerminalState: 'cancelled' });
+    }
+    if (j.outcome === 'retryThenComplete') {
+      expect(j.retryLimit).toBeGreaterThanOrEqual(1);
+      expect(j.plannedFails).toBeGreaterThanOrEqual(1);
+      expect(j.plannedFails).toBeLessThanOrEqual(j.retryLimit);
+      expect(j.expectedAttempts).toBe(j.plannedFails + 1);
+      expect(j.expectedAttemptStates.slice(0, j.plannedFails).every((s) => s === 'retry')).toBe(true);
+    }
+    if (j.outcome === 'exhaust') {
+      expect(j.expectedAttempts).toBe(j.retryLimit + 1);
+      expect(j.expectedTerminalState).toBe('failed');
+    }
+    if (j.delaySeconds > 0) expect(j.outcome).toBe('complete');
+  }
+});
