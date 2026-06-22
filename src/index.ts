@@ -1,3 +1,11 @@
+// Re-export pg-boss's entire public module surface (the `PgBoss` class, the
+// `fromPrisma` / `fromKnex` / `fromKysely` / `fromDrizzle` ORM adapters, and
+// every type) so a consumer imports everything from `pg-bossier` — the
+// module-level half of the "complete single surface" facade. pg-bossier's own
+// named exports below take precedence on any name conflict; conflicting star
+// names are dropped per ESM `export *` semantics.
+export * from 'pg-boss';
+
 export { install, uninstall } from './install.js';
 export type { InstallOptions } from './install.js';
 export { bossier } from './client.js';
