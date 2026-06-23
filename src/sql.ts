@@ -130,6 +130,55 @@ export function recordIndexesSql(s: SchemaNames): readonly string[] {
   ];
 }
 
+/**
+ * Idempotent additive column migration for an EXISTING `record` table.
+ *
+ * `recordTableSql` uses `CREATE TABLE IF NOT EXISTS`, so on a table that
+ * predates a column (e.g. a pre-`priority`/`retry_limit`/`singleton_key` or
+ * pre-`seq` install) it is a no-op and the new column never lands — that is why
+ * the old upgrade convention was the history-destroying drop+reinstall.
+ * `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` adds only what is missing and
+ * touches no existing row, so an upgrade preserves the chronicle (issue #28).
+ *
+ * Every addable column is nullable or carries a row-fillable default
+ * (`captured_at`/`seq`), so adding it to a populated table never fails. The PK
+ * columns (`job_id`, `queue`, `attempt`, `state`) existed in every shipped
+ * version and are omitted.
+ */
+export function alterRecordColumnsSql(s: SchemaNames): string {
+  const t = `${s.pgbossier}.record`;
+  return `
+ALTER TABLE ${t}
+  ADD COLUMN IF NOT EXISTS data            jsonb,
+  ADD COLUMN IF NOT EXISTS output          jsonb,
+  ADD COLUMN IF NOT EXISTS progress        jsonb,
+  ADD COLUMN IF NOT EXISTS terminal_detail jsonb,
+  ADD COLUMN IF NOT EXISTS input_snapshot  jsonb,
+  ADD COLUMN IF NOT EXISTS priority        integer,
+  ADD COLUMN IF NOT EXISTS retry_limit     integer,
+  ADD COLUMN IF NOT EXISTS singleton_key   text,
+  ADD COLUMN IF NOT EXISTS created_on      timestamptz,
+  ADD COLUMN IF NOT EXISTS started_on      timestamptz,
+  ADD COLUMN IF NOT EXISTS completed_on    timestamptz,
+  ADD COLUMN IF NOT EXISTS captured_at     timestamptz NOT NULL DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS seq             bigint      NOT NULL DEFAULT nextval('${s.pgbossier}.record_seq');`;
+}
+
+/**
+ * Drop indexes that earlier versions created but current pg-bossier does not
+ * (the data / output / input_snapshot GIN indexes — see `recordIndexesSql`).
+ * `DROP INDEX IF EXISTS` is a no-op on a fresh install. Keeps an upgraded
+ * install's index set identical to a fresh one.
+ */
+export function dropObsoleteIndexesSql(s: SchemaNames): readonly string[] {
+  const sc = s.pgbossier;
+  return [
+    `DROP INDEX IF EXISTS ${sc}.record_data_gin;`,
+    `DROP INDEX IF EXISTS ${sc}.record_output_gin;`,
+    `DROP INDEX IF EXISTS ${sc}.record_input_snapshot_gin;`,
+  ];
+}
+
 export function captureFunctionSql(s: SchemaNames): string {
   return `
 CREATE OR REPLACE FUNCTION ${s.pgbossier}.capture() RETURNS trigger
