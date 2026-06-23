@@ -119,10 +119,12 @@ export function recordIndexesSql(s: SchemaNames): readonly string[] {
   return [
     `CREATE INDEX IF NOT EXISTS record_queue_state_idx     ON ${t} (queue, state);`,
     `CREATE INDEX IF NOT EXISTS record_captured_at_idx     ON ${t} (captured_at);`,
-    `CREATE INDEX IF NOT EXISTS record_data_gin            ON ${t} USING gin (data);`,
-    `CREATE INDEX IF NOT EXISTS record_output_gin          ON ${t} USING gin (output);`,
+    // Only terminal_detail has a containment (`@>`) caller — the DLQ-lineage
+    // lookup in read.ts (findDeadLetterSource). GIN on data / output /
+    // input_snapshot was dropped: no read does `@>` on them, and each GIN index
+    // write-amplifies every capture-trigger row against the per-event budget.
+    // Re-add a specific one if/when a containment-search method is scoped.
     `CREATE INDEX IF NOT EXISTS record_terminal_detail_gin ON ${t} USING gin (terminal_detail);`,
-    `CREATE INDEX IF NOT EXISTS record_input_snapshot_gin  ON ${t} USING gin (input_snapshot);`,
     `CREATE INDEX IF NOT EXISTS record_active_idx          ON ${t} (queue, started_on) WHERE state = 'active';`,
     `CREATE INDEX IF NOT EXISTS record_seq_idx             ON ${t} (seq);`,
   ];

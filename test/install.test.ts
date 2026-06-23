@@ -25,9 +25,13 @@ test('install creates the base record indexes', async () => {
   );
   const idx = rows.map((r) => r.indexname);
   for (const name of ['record_pkey', 'record_queue_state_idx', 'record_seq_idx', 'record_captured_at_idx',
-                       'record_data_gin', 'record_output_gin', 'record_terminal_detail_gin',
-                       'record_input_snapshot_gin']) {
+                       'record_terminal_detail_gin']) {
     expect(idx).toContain(name);
+  }
+  // The data / output / input_snapshot GIN indexes were dropped — no read does
+  // `@>` containment on those columns, and each GIN taxed every capture write.
+  for (const dropped of ['record_data_gin', 'record_output_gin', 'record_input_snapshot_gin']) {
+    expect(idx).not.toContain(dropped);
   }
 });
 

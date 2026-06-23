@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal: the canonical UUID regex (the read API tests `jobId` against it to short-circuit a malformed id to a clean `null`/`[]` instead of a Postgres `uuid`-cast error) is now a single exported `UUID_RE` in `sql.ts`, replacing three identical copies in `read.ts` / `progress.ts` / `input-snapshot.ts`.
 - Internal: the `seq` column is now defined directly in `pgbossier.record`'s `CREATE TABLE` instead of bolted on by a separate `ALTER TABLE … ADD COLUMN`. Removed the speculative ALTER-based "upgrade path" and its test — no pre-`seq` version ever shipped, so there was no in-place upgrade to support (0.x schema changes are drop+reinstall). Resulting schema is identical.
 
+### Removed
+
+- **Dropped the unused `data` / `output` / `input_snapshot` GIN indexes** from `pgbossier.record`. No read method runs a JSONB `@>` containment query on those columns (only `terminal_detail` does — its `record_terminal_detail_gin` stays, serving the DLQ-lineage lookup), yet each GIN index write-amplified *every* capture-trigger row against the per-event performance budget. Validated as the one clear cut by a 5-model goal-alignment debate (the containment-search method that would use them is explicitly out of scope). The columns and their data are untouched — re-add a specific index in one line if/when a containment-search method is scoped. **0.x schema change:** existing installs drop the indexes via the standard `uninstall()` + `install()`.
+
 ### Fixed
 
 - **`build` now cleans `dist/` first**, so deleted sources don't leave stale compiled artifacts in the published tarball. A `prebuild` step (`fs.rmSync('dist')`, stdlib-only, cross-platform) runs before `tsc`; previously a leftover `dist/record.js` (from the removed `src/record.ts`) was still packed by `npm pack` / would ship on publish.
