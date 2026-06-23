@@ -143,8 +143,8 @@ If a task touches one of these and there's no companion issue, open one (or ask 
 
 - **Semantic Versioning** ([semver.org](https://semver.org/spec/v2.0.0/)) for releases. While on `0.x.y` the API is unstable — anything may break between minors. Promote to `1.0.0` only when the API surface is committed.
 - **Keep a Changelog** ([keepachangelog.com](https://keepachangelog.com/en/1.1.0/)) format in `CHANGELOG.md`. Every feature branch with user-visible changes adds an entry under `## [Unreleased]` (on `develop`) using the standard sections (`Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`).
-- **Version bump happens at release, not at feature merge.** Feature branches merge into `develop` *without* touching the version. When a release is cut — the squash of `develop` onto `main`, see § Branching — that single release commit bumps `package.json` + `package-lock.json` and renames `[Unreleased]` to the dated version section, opening a fresh `[Unreleased]`.
-- The `version` in `package.json` and the latest dated section in `CHANGELOG.md` must agree.
+- **Version bumps and releases are decoupled.** A version bump happens once a **feature or milestone is complete** — bump `package.json` + `package-lock.json` on `develop` at that point (use `npm version <x.y.z> --no-git-tag-version` to update the files without a tag or commit). **Not every version bump creates a release**, and routine in-progress feature merges need not touch the version — bump once the feature/milestone lands. Cutting a release is a *separate* act (the squash of `develop` onto `main`, see § Branching): it dates `[Unreleased]` to the current version's section, opens a fresh `[Unreleased]`, and tags — using whatever version `package.json` already carries (or bumping then, if not already bumped).
+- At **release** time the `version` in `package.json` and the newly-dated section in `CHANGELOG.md` must agree. *Between* releases `package.json` may legitimately be ahead of the latest **dated** `CHANGELOG.md` section — the in-progress version's changes accumulate under `[Unreleased]` until a release dates them.
 
 ## Branching, worktrees, and Git workflow
 
