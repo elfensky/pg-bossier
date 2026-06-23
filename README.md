@@ -4,7 +4,7 @@
 
 An operational data plane for [pg-boss](https://github.com/timgit/pg-boss) — forensic job history, typed failure detail, retry lineage, mid-job progress, and lifecycle events. pg-bossier **layers on top of** pg-boss: it extends pg-boss, and never replaces it.
 
-> **Status — pre-release.** Not yet published to npm; the package sits at `0.0.0`. Permanent job history and the typed query API work today; typed failure detail, mid-job progress, and lifecycle events are in progress. Per-feature status is in [Features](#features) below; the full scope lives in [issue #1](https://github.com/elfensky/pg-bossier/issues/1).
+> **Status — pre-release.** Tagged `v0.3.0`, **not yet published to npm** (install from a git tag — see [Install](#install)). All nine charter goals are delivered and validated in the descent-app adoption trial. Per-feature status is in [Features](#features) below; the full scope lives in [issue #1](https://github.com/elfensky/pg-bossier/issues/1).
 
 ## Why
 
@@ -84,10 +84,11 @@ Install it via npm and run the install step once against your database.
 
 ### From a git URL (pre-publish)
 
-Until pg-bossier is on npm, install it directly from a tag:
+Until pg-bossier is on npm, install it directly from a tag (use the
+latest release):
 
 ```bash
-npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.1.0'
+npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.3.0'
 ```
 
 Pin to a tag (or a specific commit SHA) rather than a branch — branch
