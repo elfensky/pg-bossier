@@ -1,5 +1,6 @@
-import type { PgBoss } from 'pg-boss';
+import type { PgBoss, SendOptions } from 'pg-boss';
 import type { Pool } from 'pg';
+import { randomUUID } from 'node:crypto';
 import { recordTerminalDetail, type TerminalDetail } from './terminal-detail.js';
 import { recordDeadLetter, type RecordDeadLetterArgs } from './dead-letter.js';
 import { setProgress, getProgress, type ProgressResult } from './progress.js';
@@ -10,12 +11,16 @@ import {
   findById, getRetryHistory, listJobs, latestPerQueue,
   countByState, countByQueue, listLongRunning, getEventsSince,
   findDeadLetterSource, findDeadLetterTarget,
-  type JobRecord, type JobState, type JobFilter, type ListJobsOpts,
+  type JobRecord, type JobState, type CountFilter, type ListJobsOpts,
 } from './read.js';
 import { subscribeEvents, type BossierEvents, type SubscribeOptions } from './events.js';
-import { getLiveState, getLiveHeartbeat, type LiveState } from './live.js';
+import { getLiveState, getLiveHeartbeat, getLiveHeartbeats, type LiveState } from './live.js';
+import { captureHealth, type CaptureHealth } from './health.js';
 import { resolveSchemas, type SchemaNames } from './sql.js';
 import { pgBossDb, type BossierDb } from './db.js';
+
+/** The field {@link BossierMethods.sendTracked} stamps the self-identifying id into. */
+const DEAD_LETTER_ID_FIELD = '_originalJobId';
 
 export interface BossierOptions {
   boss: PgBoss;
@@ -58,6 +63,21 @@ export interface BossierMethods {
     jobId: string, attempt: number, payload: TerminalDetail,
   ) => Promise<void>;
   /**
+   * `boss.send` that pins the job id AND stamps the same id into
+   * `data._originalJobId` in one call, so the dead-letter lineage contract can
+   * never half-drift (the silent failure mode of hand-threading them — issue
+   * #29). Returns the job id pg-boss assigned (the pinned id), or `null` if a
+   * singleton policy deduped the send.
+   *
+   * The DLQ handler still calls {@link recordDeadLetter} (only it knows both the
+   * source and DLQ ids), reading the source id back from
+   * `job.data._originalJobId`. Pass an explicit `{ id }` to pin a known id;
+   * otherwise a UUID is generated.
+   */
+  sendTracked: (
+    queue: string, data: object, options?: SendOptions,
+  ) => Promise<string | null>;
+  /**
    * Record a source → DLQ lineage link on the source job's most-recent
    * `failed` chronicle row. Writes `terminal_detail.deadLetteredAs = dlqJobId`
    * via a conflict-aware JSONB merge. Fail-open: missing source row,
@@ -98,10 +118,19 @@ export interface BossierMethods {
     queues: string[],
     opts?: { states?: JobState[]; orderBy?: 'createdOn' | 'completedOn' },
   ) => Promise<JobRecord[]>;
-  /** Job counts by current state (all six keys present). */
-  countByState: (filter?: JobFilter) => Promise<Record<JobState, number>>;
-  /** Job counts by queue. */
-  countByQueue: (filter?: JobFilter) => Promise<Record<string, number>>;
+  /**
+   * Job counts by current state (all six keys present). **All-time by default:**
+   * counts the chronicle, which retains jobs pg-boss has deleted, so the result
+   * is a forensic superset of live queue depth that grows unbounded. Pass
+   * `{ live: true }` for a live `pgboss.job` count, or `createdAfter` /
+   * `completedAfter` for a recent window. See issue #27.
+   */
+  countByState: (filter?: CountFilter) => Promise<Record<JobState, number>>;
+  /**
+   * Job counts by queue. All-time chronicle count by default (includes deleted
+   * jobs); pass `{ live: true }` for live `pgboss.job` queue depth. See issue #27.
+   */
+  countByQueue: (filter?: CountFilter) => Promise<Record<string, number>>;
   /** Active jobs running longer than a threshold. */
   listLongRunning: (
     opts?: { queue?: string; longerThanSeconds?: number; limit?: number },
@@ -152,6 +181,20 @@ export interface BossierMethods {
   getLiveState: <T = unknown>(jobId: string) => Promise<LiveState<T> | null>;
   /** A job's live heartbeat timestamp from pg-boss, or `null` if no live row exists. */
   getLiveHeartbeat: (jobId: string) => Promise<Date | null>;
+  /**
+   * Batched live heartbeat read — one query for many jobs, to avoid an N+1 loop
+   * of per-row {@link getLiveHeartbeat} on a dashboard (issue #34). Returns a
+   * `Map` keyed by every requested id (`Date`, or `null` for no live row /
+   * malformed id). LIVE and non-forensic, like {@link getLiveHeartbeat}.
+   */
+  getLiveHeartbeats: (jobIds: string[]) => Promise<Map<string, Date | null>>;
+  /**
+   * A capture-health snapshot: chronicle freshness (`lastCapturedSeq` /
+   * `lastCapturedAt`) plus a bounded coverage check (`checked` / `missing`) for
+   * detecting silent fail-open capture drift. Observability only — capture stays
+   * fail-open. See issue #31.
+   */
+  captureHealth: (opts?: { sampleLimit?: number }) => Promise<CaptureHealth>;
 }
 
 /**
@@ -171,6 +214,7 @@ export type Bossier = PgBoss & BossierMethods;
  * once hid (it was omitted from a hand-kept list to keep the guard green).
  */
 export const BOSSIER_METHOD_NAMES = [
+  'sendTracked',
   'recordTerminalDetail',
   'recordDeadLetter', 'findDeadLetterSource', 'findDeadLetterTarget',
   'findById', 'getRetryHistory', 'listJobs',
@@ -178,7 +222,8 @@ export const BOSSIER_METHOD_NAMES = [
   'setProgress', 'getProgress',
   'recordInputSnapshot', 'getInputSnapshot',
   'subscribeEvents', 'getEventsSince',
-  'getLiveState', 'getLiveHeartbeat',
+  'getLiveState', 'getLiveHeartbeat', 'getLiveHeartbeats',
+  'captureHealth',
 ] as const satisfies readonly (keyof BossierMethods)[];
 
 /** `subscribeEvents` needs a real pg connection an ORM adapter can't provide. */
@@ -209,6 +254,17 @@ export function bossier(options: BossierOptions): Bossier {
   });
 
   const methods: BossierMethods = {
+    sendTracked: (queue, data, options) => {
+      const id = options?.id ?? randomUUID();
+      // One call pins the id and stamps the breadcrumb, so the two halves of the
+      // lineage contract can never disagree. boss.send returns the pinned id
+      // (or null on a singleton dedup).
+      return boss.send(
+        queue,
+        { ...data, [DEAD_LETTER_ID_FIELD]: id },
+        { ...options, id },
+      );
+    },
     recordTerminalDetail: (jobId, attempt, payload) =>
       recordTerminalDetail(db, s, jobId, attempt, payload),
     recordDeadLetter: (args) => recordDeadLetter(db, s, args),
@@ -245,6 +301,8 @@ export function bossier(options: BossierOptions): Bossier {
     ) => getEventsSince<TInput, TOutput>(db, s, since, limit),
     getLiveState: <T = unknown>(jobId: string) => getLiveState<T>(boss, db, s, jobId),
     getLiveHeartbeat: (jobId) => getLiveHeartbeat(boss, db, s, jobId),
+    getLiveHeartbeats: (jobIds) => getLiveHeartbeats(db, s, jobIds),
+    captureHealth: (opts) => captureHealth(db, s, opts),
   };
   const methodNames = new Set<string>(BOSSIER_METHOD_NAMES);
 

@@ -16,10 +16,13 @@ test('re-exports pg-boss class + ORM adapters from one entry point', () => {
 test('exposes pg-bossier own API from the same entry point', () => {
   expect(typeof api.bossier).toBe('function');
   expect(typeof api.install).toBe('function');
+  expect(typeof api.migrate).toBe('function');
   expect(typeof api.uninstall).toBe('function');
   expect(typeof api.subscribeEvents).toBe('function');
   expect(typeof api.getLiveState).toBe('function');
   expect(typeof api.getLiveHeartbeat).toBe('function');
+  expect(typeof api.getLiveHeartbeats).toBe('function');
+  expect(typeof api.captureHealth).toBe('function');
   expect(typeof api.pgBossDb).toBe('function');
 });
 

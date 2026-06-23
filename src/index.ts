@@ -6,7 +6,7 @@
 // names are dropped per ESM `export *` semantics.
 export * from 'pg-boss';
 
-export { install, uninstall } from './install.js';
+export { install, migrate, uninstall } from './install.js';
 export type { InstallOptions } from './install.js';
 export { bossier } from './client.js';
 export type { Bossier, BossierMethods, BossierOptions } from './client.js';
@@ -19,7 +19,7 @@ export type {
 export type { RecordDeadLetterArgs } from './dead-letter.js';
 export type { ProgressResult } from './progress.js';
 export type { InputSnapshotResult } from './input-snapshot.js';
-export type { JobRecord, JobState, JobFilter, ListJobsOpts } from './read.js';
+export type { JobRecord, JobState, JobFilter, CountFilter, ListJobsOpts } from './read.js';
 export { subscribeEvents } from './events.js';
 export type {
   BossierEvents, JobEvent, JobEventName,
@@ -29,5 +29,7 @@ export type {
 export type { SchemaNames } from './sql.js';
 export { pgBossDb } from './db.js';
 export type { BossierDb } from './db.js';
-export { getLiveState, getLiveHeartbeat } from './live.js';
+export { getLiveState, getLiveHeartbeat, getLiveHeartbeats } from './live.js';
 export type { LiveState } from './live.js';
+export { captureHealth } from './health.js';
+export type { CaptureHealth } from './health.js';

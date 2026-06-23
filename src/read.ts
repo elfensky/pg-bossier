@@ -178,8 +178,15 @@ function resolveOffset(offset: number | undefined): number {
   return offset;
 }
 
-/** Turn a JobFilter into a parameterized WHERE clause. Params start at $1. */
-function buildWhere(filter: JobFilter): { clause: string; params: unknown[] } {
+/**
+ * Turn a JobFilter into a parameterized WHERE clause. Params start at $1.
+ * `queueColumn` is the column the filter's `queue`/`queues` map to — `'queue'`
+ * for the chronicle (`record`), `'name'` for a live `pgboss.job` read. A fixed
+ * internal value, never user input.
+ */
+function buildWhere(
+  filter: JobFilter, queueColumn = 'queue',
+): { clause: string; params: unknown[] } {
   if (filter.queue !== undefined && filter.queues !== undefined) {
     throw new Error('JobFilter: set either `queue` or `queues`, not both');
   }
@@ -188,10 +195,10 @@ function buildWhere(filter: JobFilter): { clause: string; params: unknown[] } {
   const next = (): string => `$${params.length + 1}`;
 
   if (filter.queue !== undefined) {
-    conds.push(`queue = ${next()}`);
+    conds.push(`${queueColumn} = ${next()}`);
     params.push(filter.queue);
   } else if (filter.queues !== undefined) {
-    conds.push(`queue = ANY(${next()})`);
+    conds.push(`${queueColumn} = ANY(${next()})`);
     params.push(filter.queues);
   }
   if (filter.states !== undefined) {
@@ -254,21 +261,42 @@ const ALL_STATES: readonly JobState[] = [
   'created', 'active', 'retry', 'completed', 'cancelled', 'failed',
 ];
 
-/** Job counts by current state. Zero-fills all six states. */
+/**
+ * A {@link JobFilter} plus `live`. With `live: true` the count is taken over the
+ * live `pgboss.job` table instead of the chronicle — see {@link countByState}.
+ */
+export interface CountFilter extends JobFilter {
+  /**
+   * Count over the live `pgboss.job` table (current queue depth) instead of the
+   * chronicle. Default `false` → the all-time chronicle count.
+   */
+  live?: boolean;
+}
+
+/**
+ * Job counts by current state. Zero-fills all six states.
+ *
+ * By default counts over the chronicle's current-attempt-per-job view, which
+ * **retains jobs pg-boss has already deleted** (Goal 1 forensic continuity), so
+ * the result is an **all-time superset** of a live `pgboss.job` count and grows
+ * unbounded — a forensic total, NOT live queue depth. Constrain with
+ * `createdAfter` / `completedAfter` for a recent window, or pass `{ live: true }`
+ * for a true live-`pgboss.job` count (drop-in parity with raw `pgboss.job`
+ * dashboards). See issue #27.
+ */
 export async function countByState(
   db: BossierDb,
   schemas: SchemaNames,
-  filter: JobFilter = {},
+  filter: CountFilter = {},
 ): Promise<Record<JobState, number>> {
-  const { clause, params } = buildWhere(filter);
-  const { rows } = await db.query<{ state: JobState; count: number }>(
-    `WITH ${recordCurrent(schemas)}
-     SELECT state, count(*)::int AS count
-     FROM current
-     ${clause}
-     GROUP BY state`,
-    params,
-  );
+  // Live: count over pgboss.job (Transitional tier; queue column is `name`).
+  // Default: count over the chronicle's current-attempt view.
+  const { clause, params } = buildWhere(filter, filter.live === true ? 'name' : 'queue');
+  const sql = filter.live === true
+    ? `SELECT state, count(*)::int AS count FROM ${schemas.pgboss}.job ${clause} GROUP BY state`
+    : `WITH ${recordCurrent(schemas)}
+       SELECT state, count(*)::int AS count FROM current ${clause} GROUP BY state`;
+  const { rows } = await db.query<{ state: JobState; count: number }>(sql, params);
   const result = Object.fromEntries(
     ALL_STATES.map((s) => [s, 0]),
   ) as Record<JobState, number>;
@@ -276,21 +304,22 @@ export async function countByState(
   return result;
 }
 
-/** Job counts by queue. */
+/**
+ * Job counts by queue. By default an **all-time** chronicle count (includes
+ * jobs pg-boss has deleted — see {@link countByState}); pass `{ live: true }`
+ * for live `pgboss.job` queue depth. See issue #27.
+ */
 export async function countByQueue(
   db: BossierDb,
   schemas: SchemaNames,
-  filter: JobFilter = {},
+  filter: CountFilter = {},
 ): Promise<Record<string, number>> {
-  const { clause, params } = buildWhere(filter);
-  const { rows } = await db.query<{ queue: string; count: number }>(
-    `WITH ${recordCurrent(schemas)}
-     SELECT queue, count(*)::int AS count
-     FROM current
-     ${clause}
-     GROUP BY queue`,
-    params,
-  );
+  const { clause, params } = buildWhere(filter, filter.live === true ? 'name' : 'queue');
+  const sql = filter.live === true
+    ? `SELECT name AS queue, count(*)::int AS count FROM ${schemas.pgboss}.job ${clause} GROUP BY name`
+    : `WITH ${recordCurrent(schemas)}
+       SELECT queue, count(*)::int AS count FROM current ${clause} GROUP BY queue`;
+  const { rows } = await db.query<{ queue: string; count: number }>(sql, params);
   const result: Record<string, number> = {};
   for (const row of rows) result[row.queue] = row.count;
   return result;

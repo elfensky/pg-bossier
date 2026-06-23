@@ -64,11 +64,11 @@ flowchart TD
 
 1. **Your app runs jobs through the `bossier` client.** It forwards every pg-boss queue operation to pg-boss unchanged — pg-bossier extends pg-boss's API, it never replaces it.
 2. **pg-boss manages its own `pgboss.job` table** — creating rows, updating their state, and deleting them once a retention window passes or a retry replaces them.
-3. **A capture trigger mirrors every change.** Each time a job is created or changes state, pg-bossier copies that row into its own `pgbossier.record` table — one row per attempt, so retries are preserved rather than overwritten.
+3. **A capture trigger snapshots each state transition.** Each time a job is created or **changes state**, pg-bossier copies that row into its own `pgbossier.record` table — one row per attempt, so retries are preserved rather than overwritten. `pgbossier.record` is a **state-transition chronicle, not a live mirror** of `pgboss.job`: the trigger fires on `state` changes only (`AFTER INSERT OR UPDATE OF state`), so interim writes to `pgboss.job.output` and `boss.touch()` heartbeats *between* transitions are **not** captured until the next transition. `output`/`data` therefore reflect the value at the last state change, with final output landing on the terminal transition. For live, mid-flight job progress use [`setProgress`/`getProgress`](#job-progress) (a dedicated out-of-band writer) — do not write to `pgboss.job.output` and expect to read it back from `record` before the job completes. To read the *current* `pgboss.job` row, use [`getLiveState`/`getLiveHeartbeat`](#live-runtime-state).
 4. **The history outlives pg-boss's cleanup.** When pg-boss deletes a job row, `pgbossier.record` is left untouched — the history stays.
 5. **You read history through the `bossier` client.** Its query methods only ever read `pgbossier.record`, so they keep answering long after the original `pgboss.job` row is gone.
 
-The capture is fail-open: if it ever errors, the failure is logged and skipped — it never blocks the pg-boss operation that triggered it.
+The capture is fail-open: if it ever errors, the failure is logged and skipped — it never blocks the pg-boss operation that triggered it. (A silent drop leaves a gap in `record`; [`captureHealth()`](#capture-health) surfaces it.)
 
 ## Requirements
 
@@ -94,6 +94,15 @@ Pin to a tag (or a specific commit SHA) rather than a branch — branch
 refs in `package-lock.json` re-resolve to the branch head on every
 `npm ci`, which makes builds non-reproducible.
 
+> ⚠️ **Git-URL install requires install scripts to be allowed.** `dist/` is not
+> committed; a git dependency builds itself via the `prepare` lifecycle script
+> at install time. Under script-blocking installs (`npm ci --ignore-scripts`,
+> allow-scripts gating, hardened CI) `prepare` does not run, so `dist/` is never
+> produced and `import … from 'pg-bossier'` fails later with a confusing
+> "cannot find module `./dist/index.js`". Allow the script for pg-bossier, or
+> wait for the npm release (a prebuilt `dist/` ships in the tarball — no
+> build-on-install).
+
 Adopting pg-bossier in descent-app specifically? See the step-by-step in
 [`docs/adopting-in-descent-app.md`](docs/adopting-in-descent-app.md) (it
 includes a copy-paste prompt for a Claude session in that repo).
@@ -114,6 +123,24 @@ await uninstall(pool);  // DROP SCHEMA pgbossier CASCADE
 
 `install()` is idempotent. Run it once at app boot or in a one-shot
 migration script.
+
+### Upgrading (non-destructive)
+
+To move an already-adopted install to a newer pg-bossier version, call
+`migrate(pool)` — **not** `uninstall()` + `install()`:
+
+```ts
+import { migrate } from 'pg-bossier';
+await migrate(pool); // adds any new columns/indexes in place; keeps all history
+```
+
+`migrate()` (and `install()`, which is now equally additive) brings the
+`pgbossier.record` table up to the current shape **in place** — `ALTER TABLE …
+ADD COLUMN IF NOT EXISTS`, `CREATE/DROP INDEX IF EXISTS`, `CREATE OR REPLACE`
+of the capture function/trigger — without touching existing rows. The old
+drop+reinstall convention would discard exactly the records that outlived
+pg-boss's `deletion_seconds` GC (the only reason to run pg-bossier); `migrate()`
+preserves them. Safe to re-run.
 
 ### CLI install (optional)
 
@@ -227,6 +254,16 @@ if (live?.livePresent) {
 const beat = await client.getLiveHeartbeat(jobId); // Date | null
 ```
 
+**A captured record is required.** `getLiveState` resolves the job's queue from `pgbossier.record` (to scope the read to one `pgboss.job` partition), so a job pg-bossier never captured returns `null` **even if a live `pgboss.job` row exists right now** — e.g. a job enqueued *before* `install()`, or one lost to a fail-open capture gap. `getLiveHeartbeat` (which delegates) returns `null` in the same cases. This is "unknown to pg-bossier", not necessarily "no live row".
+
+**Batched reads.** For a dashboard listing many jobs, `getLiveHeartbeats(ids)` reads every job's live heartbeat in one query (a `Map` keyed by every requested id) instead of an N+1 loop of per-row `getLiveHeartbeat`:
+
+```ts
+const { rows } = await client.listJobs({ states: ['active'] });
+const beats = await client.getLiveHeartbeats(rows.map((r) => r.jobId));
+// beats.get(id) -> Date | null   (null = no live row / no heartbeat yet)
+```
+
 ### Reading job history
 
 The `bossier` client exposes typed read methods over `pgbossier.record`. Because that table outlives pg-boss's row deletion, they answer operational questions long after the `pgboss.job` row is gone:
@@ -257,6 +294,26 @@ const latest = await client.latestPerQueue(['email', 'reports']);
 // active jobs running longer than a threshold (default 900s)
 const stalled = await client.listLongRunning({ longerThanSeconds: 600 });
 ```
+
+> **`countByState`/`countByQueue` are all-time by default.** They count the chronicle's current-attempt-per-job view, which **retains jobs pg-boss has already deleted** — so the totals are a forensic **superset** of live `pgboss.job` queue depth and grow unbounded over time. That is correct for "how many jobs of each state have ever existed", but **not** a drop-in replacement for a live-queue-depth dashboard. For a live count, pass `{ live: true }` (counts `pgboss.job` directly); for a recent window, constrain with `createdAfter` / `completedAfter`:
+>
+> ```ts
+> const allTime = await client.countByState({ queue: 'email' });            // chronicle (superset)
+> const liveNow = await client.countByState({ queue: 'email', live: true }); // live pgboss.job depth
+> ```
+
+### Capture health
+
+Capture is fail-open: a failing trigger logs a Postgres `WARNING` and leaves a gap in `pgbossier.record`, with no app-level signal. `captureHealth()` makes that drift observable — chronicle freshness plus a bounded coverage check:
+
+```ts
+const h = await client.captureHealth();
+// { lastCapturedSeq, lastCapturedAt,  // freshness — alarm if stale on a busy queue
+//   checked, missing }                // of the N most-recent live jobs, how many lack a record
+if (h.missing > 0) alert('capture dropped rows');
+```
+
+The coverage check samples the most-recent live jobs (default 1000, `{ sampleLimit }` to widen) so it stays cheap on large queues. Observability only — it never changes capture behaviour, which stays fail-open.
 
 ### Writing pg-bossier-owned columns
 
@@ -327,6 +384,16 @@ await boss.send(
   { _originalJobId: sourceId, url: 'https://example.com/photo.jpg' }, // copied into the DLQ job
   { id: sourceId },                                                    // becomes the job's actual id
 );
+```
+
+**`sendTracked` does both halves in one call** so they can't drift apart (the silent failure mode above). It pins the id and stamps `data._originalJobId` to the same value, returning the id:
+
+```ts
+const sourceId = await client.sendTracked(
+  'image-processing',
+  { url: 'https://example.com/photo.jpg' }, // _originalJobId is added for you
+);
+// pass an explicit { id } to pin a known id; otherwise one is generated.
 ```
 
 Then, in the DLQ handler, the copied field is what you hand to `recordDeadLetter`:
