@@ -62,6 +62,20 @@ test('install with invalid schema name exits 64', async () => {
   expect(stderr).toMatch(/reserved/);
 });
 
+test('a non-URL (libpq keyword/value) conn-string does not abort on the destination print (#44)', async () => {
+  // --schema=public forces a fast exit 64 (reserved-schema validation) BEFORE
+  // any connect, so this deterministically exercises only the destination-print
+  // path. The keyword/value DSN previously threw "Invalid URL" from `new URL`.
+  const { code, stdout, stderr } = await runCli([
+    'install',
+    '--schema=public',
+    '--conn-string=host=localhost dbname=foo user=bar',
+  ]);
+  expect(stderr).not.toMatch(/Invalid URL/);   // no abort from the cosmetic print
+  expect(stdout).toMatch(/install into .*schema=public/); // print still ran (host omitted)
+  expect(code).toBe(64);                        // proceeded to the real validation
+});
+
 test('install success path exits 0 and prints destination + installed', async () => {
   const { code, stdout } = await runCli([
     'install',

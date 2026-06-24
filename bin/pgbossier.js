@@ -75,10 +75,20 @@ try {
     process.exit(1);
   }
 
-  // Print destination (without credentials) before any SQL runs.
-  const url = new URL(connString);
+  // Print destination (without credentials) before any SQL runs. The DSN may be
+  // a URL or a libpq keyword/value string ("host=... dbname=..."); only URLs
+  // parse via `new URL`, so degrade gracefully instead of aborting this cosmetic
+  // print on a non-URL DSN (#44). The connect path below decides real validity.
+  let target = '';
+  try {
+    const url = new URL(connString);
+    target = `host=${url.host} database=${url.pathname.slice(1) || '(default)'} `;
+  } catch {
+    // Non-URL (keyword/value) DSN — omit host/db rather than risk echoing a
+    // password embedded in the raw string.
+  }
   console.log(
-    `pgbossier: ${cmd} into host=${url.host} database=${url.pathname.slice(1) || '(default)'} ` +
+    `pgbossier: ${cmd} into ${target}` +
     `schema=${values['schema'] ?? 'pgbossier'}` +
     (cmd === 'install' ? ` pgbossSchema=${values['pgboss-schema'] ?? 'pgboss'}` : ''),
   );
