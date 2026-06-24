@@ -21,8 +21,10 @@ on:
 jobs:
   soak:
     runs-on: ubuntu-latest
-    # Duration + buffer for npm ci, container boot, and final teardown.
-    timeout-minutes: ${{ fromJSON(inputs.minutes) + 20 }}
+    # Safety backstop only — the test bounds itself to (minutes + 5) internally.
+    # GH Actions expressions can't do arithmetic, so this is a fixed ceiling that
+    # covers the documented 30-min default + setup. ponytail: bump if you soak >75m.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
