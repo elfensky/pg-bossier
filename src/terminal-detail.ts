@@ -1,6 +1,6 @@
 import type { BossierDb } from './db.js';
 import { stringifyOrThrow } from './json.js';
-import type { SchemaNames } from './sql.js';
+import { UUID_RE, type SchemaNames } from './sql.js';
 
 /**
  * `terminal_detail` shape for a `completed` row. Any plain object — pg-bossier
@@ -71,6 +71,15 @@ function allowedStates(state: TerminalDetail['state']): string[] {
  *    `'transient'` or `'non_retryable'`.
  *  - `payload.detail` must be JSON-serializable (no BigInt, no circular refs).
  *
+ * Fail-open per issue #1's audit-write constraint (matching the other writers —
+ * `setProgress` / `setClaim` / `recordInputSnapshot` / `recordDeadLetter`): a
+ * runtime DB error is logged via `console.warn` and swallowed, and a malformed
+ * (non-UUID) `jobId` short-circuits to a clear warning + no-op rather than a raw
+ * Postgres `uuid`-cast error. A failed terminal-detail write must never fail the
+ * consumer's job — the worker is *classifying* a failure, not depending on the
+ * write. (A state-mismatch / wrong-`(jobId, attempt)` UPDATE matching zero rows
+ * stays a deliberate silent no-op.)
+ *
  * `recordTerminalDetail` is the *sole* writer for `pgbossier.record.terminal_detail`.
  */
 export async function recordTerminalDetail(
@@ -94,13 +103,25 @@ export async function recordTerminalDetail(
     }
   }
   const json = stringifyOrThrow(payload.detail, 'terminal_detail');
+  // Short-circuit a malformed (non-UUID) id like the sibling writers, so a typo
+  // logs a clear "malformed job id" rather than a Postgres uuid-cast error.
+  if (!UUID_RE.test(jobId)) {
+    console.warn(`pgbossier: recordTerminalDetail got a malformed job id: ${jobId}`);
+    return;
+  }
   const states = allowedStates(payload.state);
-  await db.query(
-    `UPDATE ${schemas.pgbossier}.record
-        SET terminal_detail = COALESCE(terminal_detail, '{}'::jsonb) || $4::jsonb
-      WHERE job_id = $1
-        AND attempt = $2
-        AND state = ANY($3::text[])`,
-    [jobId, attempt, states, json],
-  );
+  try {
+    await db.query(
+      `UPDATE ${schemas.pgbossier}.record
+          SET terminal_detail = COALESCE(terminal_detail, '{}'::jsonb) || $4::jsonb
+        WHERE job_id = $1
+          AND attempt = $2
+          AND state = ANY($3::text[])`,
+      [jobId, attempt, states, json],
+    );
+  } catch (err) {
+    console.warn(
+      `pgbossier: recordTerminalDetail failed for job ${jobId} attempt ${String(attempt)}: ${String(err)}`,
+    );
+  }
 }
