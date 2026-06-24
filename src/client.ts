@@ -73,6 +73,11 @@ export interface BossierMethods {
    * source and DLQ ids), reading the source id back from
    * `job.data._originalJobId`. Pass an explicit `{ id }` to pin a known id;
    * otherwise a UUID is generated.
+   *
+   * `sendTracked` **owns** `data._originalJobId`: any value you pass under that
+   * key is overwritten with the pinned id (the breadcrumb must equal the job's
+   * real id for lineage to resolve). To control the id, set `{ id }` — not the
+   * data key.
    */
   sendTracked: (
     queue: string, data: object, options?: SendOptions,

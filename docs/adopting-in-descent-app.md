@@ -1,4 +1,4 @@
-# Adopting pg-bossier in descent-app (v0.3.0)
+# Adopting pg-bossier in descent-app (v0.3.1)
 
 > **Updated 2026-06-23 (post-reposition, on `develop` — newer than `v0.1.0`).** Three changes affect this guide: (1) the lifecycle subscription is now **`subscribeEvents()`** (renamed from `subscribe` so it no longer shadows pg-boss's pub/sub `subscribe`); (2) the residual raw `heartbeat_on` lookup is **no longer needed** — `client.getLiveState(jobId)` / `getLiveHeartbeat(jobId)` read it (and live expiry/state) via a typed method; (3) `bossier()`'s `pool` is now **optional** (reads/writes route through pg-boss's own connection), though `subscribeEvents` and `install` still need one. See CLAUDE.md § "General-purpose reposition".
 
@@ -7,7 +7,7 @@ This is the step-by-step for the descent-app validation trial — the gate befor
 ## 1. Install (git URL — not on npm yet)
 
 ```bash
-npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.3.0'
+npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.3.1'
 ```
 
 `prepare` builds `dist/` on install — so this git-URL install needs install
@@ -68,13 +68,13 @@ The trial's measure (success criterion #1): how far does the raw-SQL count again
 
 ## Copy-paste prompt for a Claude session in descent-app
 
-> Adopt **pg-bossier v0.3.0** to remove descent-app's raw SQL against `pgboss.*` (tracking issue #343).
+> Adopt **pg-bossier v0.3.1** to remove descent-app's raw SQL against `pgboss.*` (tracking issue #343).
 >
-> 1. Install it: `npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.3.0'` (the git-URL install needs install scripts allowed — it builds `dist/` via `prepare`). Peers are `pg-boss ^12.18.2` and `pg ^8` (already present).
+> 1. Install it: `npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.3.1'` (the git-URL install needs install scripts allowed — it builds `dist/` via `prepare`). Peers are `pg-boss ^12.18.2` and `pg ^8` (already present).
 > 2. Add a one-time migration step that runs `install(pool)` from `pg-bossier` against `DATABASE_URL` (idempotent; creates the `pgbossier` schema + a capture trigger on `pgboss.job`). Keep `pgbossier` **out** of Prisma's managed schemas so `prisma migrate` can't drop it.
 > 3. Read pg-bossier's `docs/descent-app-fit.md` scorecard (in its package, or at github.com/elfensky/pg-bossier). It maps each function in `src/lib/jobs/queries.js` to a pg-bossier method. Refactor `queries.js` to call `bossier({ boss, pool })`'s methods instead of raw SQL, keeping descent-app's `normalizeJob` as a shape adapter over the returned `JobRecord`.
 > 4. **Leave raw, by design:** `updateJobOutput` / `mergeJobOutput` (they write the live `pgboss.job.output` — a pg-boss queue op pg-bossier won't replace), and any query that renders `heartbeat_on` / `expire_seconds` (still uncaptured — read live from `pgboss.job`). Note: `priority` / `retry_limit` / `singleton_key` **are** captured (v0.3.0+) and available on `JobRecord` as `priority` / `retryLimit` / `singletonKey` — don't keep raw reads for those.
-> 5. **Two contracts to honor:** (a) for dead-letter lineage, send source jobs with an explicit `{ id: sourceId }` *and* `_originalJobId: sourceId` in data, then in the DLQ handler call `client.recordDeadLetter({ sourceJobId: job.data._originalJobId, dlqJobId: job.id })`. (b) For resumable jobs, write progress with `client.setProgress(job.id, pos)` and resume at the top of the handler via `client.getProgress(job.id)` — do **not** rely on `pgboss.job.output` surviving a retry.
+> 5. **Two contracts to honor:** (a) for dead-letter lineage, enqueue source jobs with `const sourceId = await client.sendTracked('q', {...})` (pins the id and stamps `data._originalJobId` in one call), then in the DLQ handler call `client.recordDeadLetter({ sourceJobId: job.data._originalJobId, dlqJobId: job.id })`. (b) For resumable jobs, write progress with `client.setProgress(job.id, pos)` and resume at the top of the handler via `client.getProgress(job.id)` — do **not** rely on `pgboss.job.output` surviving a retry.
 > 6. Run descent-app's tests + a real worker against a real Postgres. Report back: the raw-SQL count before vs after, whether the "stays raw" short list held, and anything that forced raw SQL beyond it (those are findings for pg-bossier).
 >
 > Do **not** ask pg-bossier to store domain/provenance data — descent-app's own audit-trail table owns that. pg-bossier is queue-mechanics only.

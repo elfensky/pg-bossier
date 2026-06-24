@@ -28,6 +28,19 @@ test('sendTracked pins the job id and stamps it into data._originalJobId', async
   expect(rows[0]!.data).toEqual({ url: 'x', _originalJobId: id });
 });
 
+test('sendTracked owns data._originalJobId — overwrites a caller-supplied value', async () => {
+  const queue = 'tracked-owns';
+  await h.boss.createQueue(queue);
+  const client = bossier({ boss: h.boss, pool: h.pool });
+
+  // Caller passes their own _originalJobId; sendTracked must overwrite it with
+  // the pinned id (the breadcrumb has to equal the job's real id).
+  const id = await client.sendTracked(queue, { _originalJobId: 'stale-value', n: 1 });
+  const rows = await getRecords(h.pool, id!);
+  expect((rows[0]!.data as { _originalJobId: string })._originalJobId).toBe(id);
+  expect((rows[0]!.data as { _originalJobId: string })._originalJobId).not.toBe('stale-value');
+});
+
 test('sendTracked honors an explicit { id }', async () => {
   const queue = 'tracked-explicit';
   await h.boss.createQueue(queue);
