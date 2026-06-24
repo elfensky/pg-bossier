@@ -47,17 +47,17 @@ The verified mapping of descent-app's `src/lib/jobs/queries.js` → pg-bossier m
 
 - **8 read functions** drop their raw SQL (use `findById` / `listJobs` / `latestPerQueue` / `countByState` / `countByQueue`, plus descent-app's existing `normalizeJob` as a pure-JS shape adapter on top of `JobRecord`).
 - **Now captured (v0.3.0+):** `priority` / `retry_limit` / `singleton_key` come back on `JobRecord` as `priority` / `retryLimit` / `singletonKey`, so `getJobById` / `getRecentJobs` / `getJobsPaginated` no longer need a residual raw read for them.
-- **Stays raw by design (short list):** the two `pgboss.job.output` writers (`updateJobOutput` / `mergeJobOutput` — live queue-op writes pg-bossier won't replace), and a small residual lookup for the **2 still-uncaptured** metadata columns — `heartbeat_on` (live runtime state, only meaningful for in-flight jobs whose `pgboss.job` row still exists) and `expire_seconds` (not rendered today) — **only if** the detail view renders them.
+- **Live runtime state** — `heartbeat_on` and live state/expiry are read via the typed `getLiveState(jobId)` / `getLiveHeartbeat(jobId)` (and `getLiveHeartbeats(ids)` for a batched dashboard page), so they no longer need raw `pgboss.job` SQL. These are deliberately **non-forensic** (the live row vanishes when pg-boss deletes the job).
+- **Stays raw by design (short list):** the two `pgboss.job.output` writers (`updateJobOutput` / `mergeJobOutput` — live queue-op writes pg-bossier won't replace), and `expire_seconds` (uncaptured, not rendered today) — **only if** the detail view renders it.
 
 ## 5. Two gotchas to get right
 
-- **Dead-letter lineage needs the job's *real* id.** Set the source job's id explicitly so the chronicle keys on it, and carry it in `data` so the DLQ copy can recover it:
+- **Dead-letter lineage needs the job's *real* id.** The source job's id must be its actual `pgboss.job` id (so the chronicle keys on it) AND ride in `data` (so the DLQ copy can recover it). Use **`sendTracked`** (v0.3.0) — it pins both in one call so they can't drift:
   ```ts
-  const sourceId = crypto.randomUUID();
-  await boss.send('q', { _originalJobId: sourceId, ... }, { id: sourceId });
+  const sourceId = await client.sendTracked('q', { ... }); // sets data._originalJobId = the pinned id
   // DLQ handler: client.recordDeadLetter({ sourceJobId: job.data._originalJobId, dlqJobId: job.id })
   ```
-  Without `{ id: sourceId }`, `recordDeadLetter` silently no-ops (`reason: 'not_found'`).
+  (The manual equivalent is `boss.send('q', { _originalJobId: sourceId, ... }, { id: sourceId })`. Omit the `{ id }` half and `recordDeadLetter` silently no-ops with `reason: 'not_found'` — which is exactly what `sendTracked` prevents.)
 - **Progress resume is pg-bossier-side.** Don't rely on `pgboss.job.output` surviving a retry (it doesn't). Write progress with `setProgress(job.id, pos)`, and at the **top** of the handler resume via `getProgress(job.id)`.
 
 ## 6. What to report back

@@ -38,13 +38,19 @@ const DEFAULT_SAMPLE_LIMIT = 1000;
  * / `lastCapturedAt`) plus a bounded coverage check (how many of the most-recent
  * live `pgboss.job` rows are missing from `record`).
  *
- * The coverage check is bounded to the `sampleLimit` (default 1000) most-recent
- * live jobs so it stays cheap on a large queue — it samples, it does not scan
- * the whole table. Pass a larger `sampleLimit` for a wider (more expensive)
- * check. Reads `pgboss.job` (Transitional tier, like the backfill).
+ * The coverage check looks at the `sampleLimit` (default 1000) most-recent live
+ * jobs. **Not an O(1) probe:** finding the most-recent N means an
+ * `ORDER BY created_on DESC LIMIT` over `pgboss.job`, which on a large
+ * partitioned table reads/sorts proportional to the live-job count (no index
+ * pg-bossier controls). `sampleLimit` bounds the *result* (the join + the
+ * `missing` count), not the scan. So **call this periodically (cron / an admin
+ * health job), not on a hot per-request path.** The freshness half
+ * (`lastCapturedSeq`/`lastCapturedAt`) is cheap (indexed `record.seq`); the
+ * coverage half is the expensive one. Reads `pgboss.job` (Transitional tier,
+ * like the backfill).
  *
- * ponytail: bounded sample, not an exact full-table audit — raise `sampleLimit`
- * if a deployment needs exhaustive coverage.
+ * ponytail: most-recent-N sample, not an exact full-table audit — raise
+ * `sampleLimit` for wider coverage at proportionally more cost.
  */
 export async function captureHealth(
   db: BossierDb,

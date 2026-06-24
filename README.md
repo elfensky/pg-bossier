@@ -314,7 +314,7 @@ const h = await client.captureHealth();
 if (h.missing > 0) alert('capture dropped rows');
 ```
 
-The coverage check samples the most-recent live jobs (default 1000, `{ sampleLimit }` to widen) so it stays cheap on large queues. Observability only — it never changes capture behaviour, which stays fail-open.
+The coverage check looks at the most-recent live jobs (default 1000, `{ sampleLimit }` to widen). It is **not an O(1) probe** — finding the most-recent N means an `ORDER BY created_on DESC LIMIT` over `pgboss.job`, which scans/sorts proportional to the live-job count on a large queue (`sampleLimit` bounds the result, not the scan). **Run it periodically (cron / an admin health job), not on a hot per-request path.** The freshness half (`lastCapturedSeq`/`lastCapturedAt`) is cheap; the coverage half is the expensive one. Observability only — it never changes capture behaviour, which stays fail-open.
 
 ### Writing pg-bossier-owned columns
 
