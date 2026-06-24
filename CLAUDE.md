@@ -222,7 +222,7 @@ Formatter (Prettier or alternative) is deferred — that's a separate decision w
 - **Lint:** `npm run lint` — ESLint flat config (auto-fix: `npm run lint:fix`)
 - **Build:** `npm run build` — `tsc` emits to `dist/` (gitignored)
 - **Test:** `npm test` — runs `vitest run`. Integration tests live under `test/`, exercised against real Postgres + pg-boss via `@testcontainers/postgresql` (Docker required, no mocks). `vitest.config.ts` sets `fileParallelism: false` — one container per test file.
-- **CI:** `.github/workflows/ci.yml` runs `npm ci` → lint → build → test on every push to `develop` or `main` and every pull request (`ubuntu-latest`, Node 22). The testcontainers suite runs on the runner's own Docker — no `services:` block. One Node / one pg-boss version for now; the pg-boss version matrix is tracked in issue #9.
+- **CI:** `.github/workflows/ci.yml` runs `npm ci` → lint → build → test on every push to `develop` or `main` and every pull request (`ubuntu-latest`, Node pinned via `.node-version` — currently 24, the active LTS). All workflows use `actions/*@v5` (node24 action runtime, no node20 deprecation warning) and resolve the test-Node version from `.node-version` through `setup-node`'s `node-version-file`, so it lives in one file that mise/asdf/nvm read too. The testcontainers suite runs on the runner's own Docker — no `services:` block. One Node / one pg-boss version for now; the pg-boss version matrix is tracked in issue #9.
 
 **Verify before claiming done.** Run `npm run lint && npm run build && npm test` before reporting a task complete. Order mirrors the CI workflow's fail-fast order: cheap checks first. If anything fails, report the actual output — don't suppress, don't simplify, don't claim success.
 
