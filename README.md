@@ -72,7 +72,7 @@ The capture is fail-open: if it ever errors, the failure is logged and skipped �
 
 ## Requirements
 
-- Node.js ≥ 18
+- Node.js ≥ 20.4
 - [pg-boss](https://github.com/timgit/pg-boss) 12 (`^12.18.2`) — peer dependency
 - [`pg`](https://node-postgres.com/) 8 (`^8`) — peer dependency
 - PostgreSQL, as required by pg-boss 12
