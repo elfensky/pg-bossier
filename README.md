@@ -104,10 +104,6 @@ refs in `package-lock.json` re-resolve to the branch head on every
 > wait for the npm release (a prebuilt `dist/` ships in the tarball — no
 > build-on-install).
 
-Adopting pg-bossier in descent-app specifically? See the step-by-step in
-[`docs/adopting-in-descent-app.md`](docs/adopting-in-descent-app.md) (it
-includes a copy-paste prompt for a Claude session in that repo).
-
 ### Programmatic install
 
 ```ts
@@ -269,7 +265,7 @@ const beats = await client.getLiveHeartbeats(rows.map((r) => r.jobId));
 
 The `bossier` client exposes typed read methods over `pgbossier.record`. Because that table outlives pg-boss's row deletion, they answer operational questions long after the `pgboss.job` row is gone:
 
-> **Replacing raw `pgboss.job` queries?** [`docs/descent-app-fit.md`](docs/descent-app-fit.md) is a worked, verified mapping of common read queries (latest-per-queue, paginated lists, state/queue counts, by-id lookup, windowed failure counts) onto these methods — including which queries stay raw by design and why.
+> **Replacing raw `pgboss.job` queries?** These methods cover the common read patterns — by-id lookup, paginated/filtered lists, latest-per-queue, and state/queue counts (with `{ live: true }` for live `pgboss.job` depth, or a `completedAfter` window for rolling failure counts). The few operations that stay raw by design are the live `pgboss.job.output` writes (`complete`/queue ops, which pg-bossier extends rather than replaces).
 
 ```ts
 // the latest attempt of one job — null if unknown
@@ -387,7 +383,7 @@ await boss.send(
 );
 ```
 
-**`sendTracked` does both halves in one call** so they can't drift apart (the silent failure mode above). It pins the id and stamps `data._originalJobId` to the same value, returning the id:
+**`sendTracked` does both halves in one call** so they can't drift apart (the silent failure mode above). It pins the id and stamps `data._originalJobId` to the same value, returning the id (or `null` if a singleton policy deduped the send):
 
 ```ts
 const sourceId = await client.sendTracked(
@@ -519,17 +515,6 @@ import type { InputSnapshotResult } from 'pg-bossier';
 #### Size
 
 The column is unbounded. PostgreSQL TOASTs large JSONB transparently, so a one-megabyte snapshot is mechanically fine — but `pgbossier.record` grows forever, and unbounded snapshots multiply your storage cost (≈$0.10/GB/month on most cloud providers), make `findById` projections heavier than they would otherwise be, and bloat backups. Snapshot what is forensically useful, not the whole upstream response. Compression is consumer-owned (TOAST handles large values; pg-bossier does not pre-compress).
-
-#### Index migration note for large existing installs
-
-`install()` issues a plain `CREATE INDEX IF NOT EXISTS record_input_snapshot_gin ... USING gin (input_snapshot)`. That is fine for fresh installs and for upgrades on small/medium tables. On a `pgbossier.record` table that already holds millions of rows, the index build will hold an ACCESS EXCLUSIVE lock long enough to stall capture writes. Pre-create the index concurrently *before* you call `install()`:
-
-```sql
-CREATE INDEX CONCURRENTLY record_input_snapshot_gin
-  ON pgbossier.record USING gin (input_snapshot);
-```
-
-Then run `install()` — the `IF NOT EXISTS` clause sees the index already present and skips it.
 
 #### What does NOT change
 

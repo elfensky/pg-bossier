@@ -124,10 +124,10 @@ Each decision below is its own GitHub issue. Sub-issues opened during the issue 
 | ✅ Forensic audit table — schema, capture mechanism, write semantics _(done — #2 closed)_ | Goal 1 |
 | ✅ Terminal-state detail — `recordTerminalDetail({state, detail})` with state-bound SQL writer + retry-state reader narrowing _(done — issue #3 closed)_ | Goal 2 |
 | ✅ Retry history — `recordDeadLetter({sourceJobId, dlqJobId})` + `findDeadLetterSource` + `findDeadLetterTarget`; trigger-detection impossibility verified; OPTION-A fix to Goal 2's writer enables composition _(done — issue #4 closed)_ | Goal 3 |
-| ✅ Input-snapshot slot — `recordInputSnapshot(jobId, attempt, snapshot)` + `getInputSnapshot<T>(jobId, attempt?)`; GIN index on `input_snapshot`; pre-existing `recordPatch` COALESCE bug fixed in prep commit _(done — issue #5 closed; charter complete)_ | Goal 4 |
+| ✅ Input-snapshot slot — `recordInputSnapshot(jobId, attempt, snapshot)` + `getInputSnapshot<T>(jobId, attempt?)`; pre-existing `recordPatch` COALESCE bug fixed in prep commit _(done — issue #5 closed; charter complete)_ | Goal 4 |
 | ✅ New APIs — operational read method signatures, TS generics surface _(read API merged — PR #17; #6 closed)_ | Goal 5 |
 | ✅ Persistent progress API — `setProgress` / `getProgress`, retry-resume semantics _(done — merged `a7a8074`; #7 closed)_ | Goal 6 |
-| ✅ Lifecycle event API — `subscribe()` + typed `BossierEvents` with six event types plus catch-all / connected / warning / discriminated error; `getEventsSince(seq)` catch-up read; monotonic `seq` column on `pgbossier.record`. _(done — issue #8 closed)_ | Goal 7 |
+| ✅ Lifecycle event API — `subscribeEvents()` (renamed from `subscribe` in WS-A) + typed `BossierEvents` with six event types plus catch-all / connected / warning / discriminated error; `getEventsSince(seq)` catch-up read; monotonic `seq` column on `pgbossier.record`. _(done — issue #8 closed)_ | Goal 7 |
 | ✅ pg-boss compatibility tier doc + decision against a matrix _(done — #9 closed; correctness-assertions follow-up #19 opened)_ | Goal 8 |
 | ✅ Goal 9 — Install/uninstall. `install`/`uninstall` accept `{ schema, pgbossSchema }`; schema-name validation rejects data-loss-prone names; `install()` wraps DDL in a transaction with a preflight check; CLI ships at `bin/pgbossier.js`; trigger + NOTIFY channel both schema-scoped. First `npm publish` deferred per CLAUDE.md until descent-app validation. Issue #10 closed. | Goal 9 |
 

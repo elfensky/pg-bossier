@@ -43,8 +43,8 @@ npm run lint && npm run build && npm test
 npm publish --dry-run
 # → surfaces metadata/files issues; runs `prepare` (tsc) end-to-end
 
-# 2. Decide the version. First release = 0.1.0. Subsequent: bump per
-#    the version policy in CLAUDE.md.
+# 2. Decide the version. Latest tag is v0.3.1; bump per the version
+#    policy in CLAUDE.md (minor for features, patch for fixes).
 
 # 3. Switch to main, snapshot develop's tree (NOT git merge — develop
 #    and main have unrelated histories by design):
@@ -81,8 +81,8 @@ npm publish
 Consumers install pg-bossier via:
 
 ```bash
-# Primary (reproducible — SHA-pinned):
-npm install git+https://github.com/elfensky/pg-bossier#<commit-sha>
+# Primary (reproducible — tag-pinned to the latest release):
+npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.3.1'
 
 # Local pack:
 cd pg-bossier && npm pack
@@ -94,6 +94,6 @@ against a real workload.
 
 ## Version policy
 
-- **v0.1.0** = first release. All current `[Unreleased]` work bundles into the 0.1.0 entry.
-- **v0.x.y** while the API surface is maturing. Minor bumps for features, patch bumps for fixes. Non-additive schema changes are minor bumps under 0.x.
+- **v0.x.y** while the API surface is maturing (latest tag: `v0.3.1`). Minor bumps for features, patch bumps for fixes. Non-additive schema changes are minor bumps under 0.x.
+- **Version bumps and releases are decoupled** — see § Versioning and changelog in [CLAUDE.md](./CLAUDE.md). A bump lands on `develop` when a feature/milestone completes; the dev-marker tags (`v0.2.0` / `v0.3.0` / `v0.3.1`) live on `develop`, not on `main` release commits. The first `npm publish` is still gated on the descent-app validation trial.
 - **v1.0.0** only when the API surface is committed.

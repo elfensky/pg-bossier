@@ -24,7 +24,8 @@ pg-boss is pinned as a peer dependency at `^12.18.2`.
 
 ### Transitional
 
-- **The `pgboss.job` table.** The capture trigger and the install-time backfill read these columns: `id`, `name`, `retry_count`, `state`, `data`, `output`, `created_on`, `started_on`, `completed_on`.
+- **The `pgboss.job` table.** The capture trigger and the install-time backfill read these columns: `id`, `name`, `retry_count`, `state`, `data`, `output`, `priority`, `retry_limit`, `singleton_key`, `created_on`, `started_on`, `completed_on`.
+- **Direct `pgboss.job` reads by the v0.3.x operational methods.** `captureHealth()` reads `id` / `created_on` (its coverage sample); `getLiveHeartbeats(ids)` reads `id` / `heartbeat_on`; the `{ live: true }` option on `countByState` / `countByQueue` reads `state` / `name`. These add `heartbeat_on` to the column set above and depend on `pgboss.job` being directly `SELECT`-able by those columns. (By contrast `getLiveState` / `getLiveHeartbeat` go through pg-boss's public `findJobs` — Stable, not a raw read.)
 - **A row trigger on `pgboss.job`.** `install()` attaches `pgbossier_capture` — `AFTER INSERT OR UPDATE OF state ... FOR EACH ROW` — to a pg-boss-owned table. This relies on pg-boss 12's `pgboss.job` being a partitioned table whose parent row trigger propagates to its per-queue partitions. That is a structural fact of pg-boss 12, not a documented API — hence Transitional.
 
 pg-boss 12 has **no `pgboss.archive` table**; finished job rows are deleted in place by `deletion_seconds`. pg-bossier therefore reads only the live `pgboss.job` — and its whole reason to exist is to preserve what that deletion discards.
@@ -100,9 +101,9 @@ Three viable consumer options:
 
 1. Route the subscriber connection through PgBouncer in **session-pool** mode.
 2. Use a separate Postgres connection (no PgBouncer) for the subscriber.
-3. Connect directly to Postgres for `subscribe()`.
+3. Connect directly to Postgres for `subscribeEvents()`.
 
-Detect silently-broken subscribers via the `'connected'` event — register a listener and alert if no `'connected'` arrives within N seconds of `subscribe()` returning.
+Detect silently-broken subscribers via the `'connected'` event — register a listener and alert if no `'connected'` arrives within N seconds of `subscribeEvents()` returning.
 
 ### Standby / read-replica connections — unsupported
 

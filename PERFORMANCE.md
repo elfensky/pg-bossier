@@ -230,6 +230,7 @@ Out of scope for v1; tracked as follow-ups in [#21](https://github.com/elfensky/
 - Multi-queue cardinality — a single queue (`perf-queue`) is used throughout.
 - Concurrent workers — the bench is single-process and sequential.
 - Active-jobs scenarios — all jobs are `completed` by the time queries run; `listLongRunning` is timed but returns an empty result set.
+- The v0.3.x operational methods — `captureHealth`, `getLiveHeartbeats`, `sendTracked`, and the `{ live: true }` variants of `countByState` / `countByQueue`. The bench covers only the ten read methods listed in § 3; the live `pgboss.job` reads and the capture-health coverage sample are unbenched.
 
 ---
 
