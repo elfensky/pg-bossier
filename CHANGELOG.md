@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pgbossier.record` chronicle stays faithful per job, plus forensic-delete
   survival, fail-open (audit-path outage), and a gated connection-kill phase
   (`BATTLE_CHAOS_FULL=1`). Reproducible via `BATTLE_SEED`; tunable via `BATTLE_N`.
+- Long-running soak harness (`test/battle/soak.test.ts`, `npm run test:soak`):
+  reuses the battle engine in a wall-clock loop (`BATTLE_SOAK_MINUTES`) of
+  bounded-`N` storms, asserting the per-job oracle, forensic-delete survival,
+  periodic audit-outage fail-open recovery (`BATTLE_SOAK_OUTAGE_EVERY`), and a
+  strictly-ascending event-seq finale every run. Opt-in: at `0` minutes the file
+  is skipped and boots no container, so the default suite pays nothing.
+  Connection-kill recovery is intentionally excluded (it surfaces unhandled
+  pg-boss socket `error`s — kept in the gated Phase D). Manual-only CI workflow
+  `.github/workflows/battle-soak.yml` (`workflow_dispatch`, inputs:
+  minutes / n / seed).
 
 ### Changed
 

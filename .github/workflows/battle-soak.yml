@@ -1,0 +1,38 @@
+# Long-running battle soak — MANUAL ONLY (no schedule, no per-push cost).
+# Click "Run workflow" in the Actions tab. Repeats the battle engine's bounded
+# storms plus periodic connection-kill and audit-outage rounds for `minutes`,
+# asserting recovery + zero chronicle corruption every iteration. Uses
+# testcontainers on the runner's own Docker, same as the default CI suite.
+name: Battle soak (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: 'Soak duration (wall-clock minutes)'
+        default: '30'
+      n:
+        description: 'Jobs per iteration (keep <= 2000 — engine ceiling)'
+        default: '200'
+      seed:
+        description: "Seed: a fixed number, or 'random' for a fresh interleaving each run"
+        default: 'random'
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    # Duration + buffer for npm ci, container boot, and final teardown.
+    timeout-minutes: ${{ fromJSON(inputs.minutes) + 20 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Soak
+        env:
+          BATTLE_SOAK_MINUTES: ${{ inputs.minutes }}
+          BATTLE_N: ${{ inputs.n }}
+          BATTLE_SEED: ${{ inputs.seed }}
+        run: npm run test:soak
