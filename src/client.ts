@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { recordTerminalDetail, type TerminalDetail } from './terminal-detail.js';
 import { recordDeadLetter, type RecordDeadLetterArgs } from './dead-letter.js';
 import { setProgress, getProgress, type ProgressResult } from './progress.js';
+import { setClaim, getClaim } from './claim.js';
 import {
   recordInputSnapshot, getInputSnapshot, type InputSnapshotResult,
 } from './input-snapshot.js';
@@ -147,6 +148,20 @@ export interface BossierMethods {
     jobId: string,
   ) => Promise<ProgressResult<TProgress> | null>;
   /**
+   * Write a job's claim owner (e.g. the worker that pulled it) to its current
+   * attempt's `claimed_by`. Per-attempt, so a retry's owner is recorded
+   * separately. Useful when an external pull-worker must prove ownership of an
+   * active job (the consumer reads it back via {@link getClaim} to authorize
+   * progress/complete/fail). Fail-open; throws only if `ownerId` isn't a
+   * non-empty string.
+   */
+  setClaim: (jobId: string, ownerId: string) => Promise<void>;
+  /**
+   * Read a job's claim owner — the most-recent non-null `claimed_by` across its
+   * attempts. `null` if unknown or never claimed.
+   */
+  getClaim: (jobId: string) => Promise<string | null>;
+  /**
    * Write a job's input snapshot to a specific `(jobId, attempt)` row. The sole
    * writer of `pgbossier.record.input_snapshot`. Fail-open: a missing row or DB
    * error warns and no-ops; only argument validation (undefined / null /
@@ -225,6 +240,7 @@ export const BOSSIER_METHOD_NAMES = [
   'findById', 'getRetryHistory', 'listJobs',
   'latestPerQueue', 'countByState', 'countByQueue', 'listLongRunning',
   'setProgress', 'getProgress',
+  'setClaim', 'getClaim',
   'recordInputSnapshot', 'getInputSnapshot',
   'subscribeEvents', 'getEventsSince',
   'getLiveState', 'getLiveHeartbeat', 'getLiveHeartbeats',
@@ -288,6 +304,8 @@ export function bossier(options: BossierOptions): Bossier {
     setProgress: (jobId, progress) => setProgress(db, s, jobId, progress),
     getProgress: <TProgress = unknown>(jobId: string) =>
       getProgress<TProgress>(db, s, jobId),
+    setClaim: (jobId, ownerId) => setClaim(db, s, jobId, ownerId),
+    getClaim: (jobId) => getClaim(db, s, jobId),
     recordInputSnapshot: (jobId, attempt, snapshot) =>
       recordInputSnapshot(db, s, jobId, attempt, snapshot),
     // Overloaded: dispatch at the call site to land on each of the underlying

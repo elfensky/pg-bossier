@@ -80,9 +80,9 @@ test('migrate() brings the record table to the current column set', async () => 
      WHERE table_schema = 'pgbossier' AND table_name = 'record'`,
   );
   expect(rows.map((r) => r.column_name).sort()).toEqual(
-    ['attempt', 'captured_at', 'completed_on', 'created_on', 'data', 'input_snapshot',
-     'job_id', 'output', 'priority', 'progress', 'queue', 'retry_limit', 'seq',
-     'singleton_key', 'started_on', 'state', 'terminal_detail'],
+    ['attempt', 'captured_at', 'claimed_by', 'completed_on', 'created_on', 'data',
+     'input_snapshot', 'job_id', 'output', 'priority', 'progress', 'queue',
+     'retry_limit', 'seq', 'singleton_key', 'started_on', 'state', 'terminal_detail'],
   );
 });
 

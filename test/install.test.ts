@@ -6,16 +6,16 @@ let h: Harness;
 beforeAll(async () => { h = await startHarness(); await install(h.pool); });
 afterAll(async () => { await h.teardown(); });
 
-test('install creates the pgbossier.record table with all 17 columns', async () => {
+test('install creates the pgbossier.record table with all 18 columns', async () => {
   const { rows } = await h.pool.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
      WHERE table_schema = 'pgbossier' AND table_name = 'record'`,
   );
   const cols = rows.map((r) => r.column_name).sort();
   expect(cols).toEqual(
-    ['attempt', 'captured_at', 'completed_on', 'created_on', 'data', 'input_snapshot',
-     'job_id', 'output', 'priority', 'progress', 'queue', 'retry_limit', 'seq',
-     'singleton_key', 'started_on', 'state', 'terminal_detail'],
+    ['attempt', 'captured_at', 'claimed_by', 'completed_on', 'created_on', 'data',
+     'input_snapshot', 'job_id', 'output', 'priority', 'progress', 'queue',
+     'retry_limit', 'seq', 'singleton_key', 'started_on', 'state', 'terminal_detail'],
   );
 });
 

@@ -567,6 +567,23 @@ import type { ProgressResult } from 'pg-bossier';
 // { progress: TProgress; attempt: number }
 ```
 
+### Job claim owner
+
+`setClaim` records *which worker owns a job's current attempt* — e.g. the id of an external pull-worker that fetched it. Like `setProgress`, the target attempt is resolved server-side (a worker needs only `job.id`), it is per-attempt (a retry's owner is recorded separately, so "who ran attempt N?" stays answerable), and it is fail-open (a failed write warns and never fails the consumer's job). It throws only if `ownerId` is not a non-empty string.
+
+```ts
+await client.setClaim(job.id, workerId);
+```
+
+`getClaim` returns the most-recent non-null `claimed_by` across the job's attempts, or `null` if the job is unknown or was never claimed. A pull-worker architecture can use it to authorize a later progress/complete/fail call: read the recorded owner and reject a request whose worker id doesn't match.
+
+```ts
+const owner = await client.getClaim(jobId); // 'worker-7' | null
+if (owner !== requestingWorkerId) throw new Error('not your job');
+```
+
+Unlike `progress` (a JSON value), `claimed_by` is a plain `text` owner id — a small, indexed-friendly column distinct from the progress slot, so ownership and progress never compete for the same field.
+
 ### Lifecycle events (Goal 7)
 
 Subscribe to job state transitions instead of polling. The method is `subscribeEvents()` — named so it never shadows pg-boss's own pub/sub `subscribe(event, name)`, which stays reachable on the same client. It requires a `pool` (LISTEN/NOTIFY needs a dedicated connection):
