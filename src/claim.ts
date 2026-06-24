@@ -24,6 +24,12 @@ export async function setClaim(
       'pg-bossier: claim validation: ownerId must be a non-empty string',
     );
   }
+  // Short-circuit a malformed (non-UUID) id like getClaim does, so a typo logs a
+  // clear "malformed job id" rather than a confusing Postgres uuid-cast error.
+  if (!UUID_RE.test(jobId)) {
+    console.warn(`pgbossier: setClaim got a malformed job id: ${jobId}`);
+    return;
+  }
   try {
     const { rowCount } = await db.query(
       `UPDATE ${schemas.pgbossier}.record
@@ -46,10 +52,15 @@ export async function setClaim(
 }
 
 /**
- * Read a job's claim owner — the most-recent non-null `claimed_by` across the
- * job's attempts. `null` if the job is unknown to pg-bossier or no attempt was
- * ever claimed. A malformed (non-UUID) `jobId` short-circuits to `null` without
- * a query.
+ * Read a job's claim owner — the `claimed_by` of its *current* (highest)
+ * attempt, matching the attempt {@link setClaim} writes to. `null` if the
+ * current attempt was never claimed, or the job is unknown to pg-bossier. A
+ * malformed (non-UUID) `jobId` short-circuits to `null` without a query.
+ *
+ * Current-attempt-scoped on purpose: it answers "who owns this job *now*", so an
+ * owner-equality authz check can't be satisfied by a stale owner carried over
+ * from a prior (failed/retried) attempt. Per-attempt ownership history stays
+ * queryable via the chronicle (`getRetryHistory`).
  */
 export async function getClaim(
   db: BossierDb, schemas: SchemaNames, jobId: string,
@@ -57,7 +68,7 @@ export async function getClaim(
   if (!UUID_RE.test(jobId)) return null;
   const { rows } = await db.query<{ claimed_by: string | null }>(
     `SELECT claimed_by FROM ${schemas.pgbossier}.record
-     WHERE job_id = $1 AND claimed_by IS NOT NULL
+     WHERE job_id = $1
      ORDER BY attempt DESC
      LIMIT 1`,
     [jobId],

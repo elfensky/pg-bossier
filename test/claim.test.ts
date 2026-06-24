@@ -45,6 +45,26 @@ test('getClaim returns the most-recent owner', async () => {
   expect(await getClaim(h.pool, SCHEMAS, jobId!)).toBe('worker-7');
 });
 
+test('getClaim is scoped to the current attempt — a prior attempt owner does not leak', async () => {
+  const queue = 'claim-retry';
+  await h.boss.createQueue(queue);
+  const jobId = await h.boss.send(queue, {});
+  // attempt 0 is claimed by worker-A
+  await setClaim(h.pool, SCHEMAS, jobId!, 'worker-A');
+  // simulate a pg-boss retry: the capture trigger inserts a fresh attempt-1 row
+  // with claimed_by NULL (the trigger never writes claimed_by).
+  await h.pool.query(
+    `INSERT INTO pgbossier.record (job_id, queue, attempt, state)
+     VALUES ($1, $2, 1, 'created')`,
+    [jobId, queue],
+  );
+  // current (latest) attempt was never claimed → null, NOT the stale 'worker-A'
+  expect(await getClaim(h.pool, SCHEMAS, jobId!)).toBeNull();
+  // claiming the current attempt then reads back as its owner
+  await setClaim(h.pool, SCHEMAS, jobId!, 'worker-B');
+  expect(await getClaim(h.pool, SCHEMAS, jobId!)).toBe('worker-B');
+});
+
 test('getClaim returns null for a job that was never claimed', async () => {
   const queue = 'claim-get-empty';
   await h.boss.createQueue(queue);

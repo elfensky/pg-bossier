@@ -157,8 +157,11 @@ export interface BossierMethods {
    */
   setClaim: (jobId: string, ownerId: string) => Promise<void>;
   /**
-   * Read a job's claim owner — the most-recent non-null `claimed_by` across its
-   * attempts. `null` if unknown or never claimed.
+   * Read a job's claim owner — the `claimed_by` of its current (latest)
+   * attempt, matching where {@link BossierMethods.setClaim} writes. `null` if
+   * the current attempt was never claimed, or the job is unknown. Scoped to the
+   * current attempt so a stale owner from a prior retried attempt can't satisfy
+   * an owner-equality authz check.
    */
   getClaim: (jobId: string) => Promise<string | null>;
   /**

@@ -518,7 +518,6 @@ The column is unbounded. PostgreSQL TOASTs large JSONB transparently, so a one-m
 
 #### What does NOT change
 
-- **The GIN index is added on install/upgrade transparently.** No action needed for small/medium installs.
 - **The capture trigger is unchanged.** It has never touched `input_snapshot` (the column is pgbossier-owned, not pg-boss-mirrored) and that stays true.
 
 ### Job progress
@@ -575,7 +574,7 @@ import type { ProgressResult } from 'pg-bossier';
 await client.setClaim(job.id, workerId);
 ```
 
-`getClaim` returns the most-recent non-null `claimed_by` across the job's attempts, or `null` if the job is unknown or was never claimed. A pull-worker architecture can use it to authorize a later progress/complete/fail call: read the recorded owner and reject a request whose worker id doesn't match.
+`getClaim` returns the `claimed_by` of the job's **current** (latest) attempt — matching where `setClaim` writes — or `null` if the current attempt was never claimed (or the job is unknown). It is current-attempt-scoped on purpose: a pull-worker architecture can use it to authorize a later progress/complete/fail call without a stale owner from a prior failed/retried attempt satisfying the check (a fresh retry attempt reads back as unclaimed until its worker calls `setClaim`).
 
 ```ts
 const owner = await client.getClaim(jobId); // 'worker-7' | null

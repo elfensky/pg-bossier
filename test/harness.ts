@@ -47,6 +47,7 @@ export interface RecordRow {
   priority: number | null;
   retry_limit: number | null;
   singleton_key: string | null;
+  claimed_by: string | null;
   created_on: Date | null;
   started_on: Date | null;
   completed_on: Date | null;
