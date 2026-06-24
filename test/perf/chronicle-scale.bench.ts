@@ -63,5 +63,5 @@ describe('Perf — chronicle read methods (1k jobs)', () => {
   bench("latestPerQueue(['perf-queue'])", () => client.latestPerQueue([QUEUE]),                         PIN_100);
   bench('countByState({})',               () => client.countByState({}),                                PIN_100);
   bench('countByQueue({})',               () => client.countByQueue({}),                                PIN_100);
-  bench('listLongRunning({900})',         () => client.listLongRunning({ olderThanSeconds: 900 }),      PIN_100);
+  bench('listLongRunning({900})',         () => client.listLongRunning({ longerThanSeconds: 900 }),     PIN_100);
 });
