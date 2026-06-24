@@ -97,26 +97,48 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
 
   async open(): Promise<void> {
     if (this.closed) return;
-    this.client = await this.pool.connect();
-    this.client.on('notification', this.boundNotification);
-    this.client.on('error', this.boundError);
-    this.client.on('end', this.boundEnd);
-    await this.client.query(`LISTEN ${this.schemas.pgbossier}_job`);
+    const client = await this.pool.connect();
+    // Closed while connecting? this.client is still null, so close() couldn't
+    // see this client — release it here instead of leaking an orphan LISTEN.
+    if (this.closed) { client.release(); return; }
+    try {
+      client.on('notification', this.boundNotification);
+      client.on('error', this.boundError);
+      client.on('end', this.boundEnd);
+      await client.query(`LISTEN ${this.schemas.pgbossier}_job`);
+    } catch (err) {
+      // Setup failed after connect() — release the client so it returns to the
+      // pool instead of leaking (a reconnect loop would otherwise exhaust the
+      // pool, one client per attempt). Then rethrow for the caller/reconnect.
+      this.detach(client);
+      client.release(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
+    // Aborted during the LISTEN await? Same orphan case as above.
+    if (this.closed) {
+      this.detach(client);
+      try { client.release(); } catch { /* */ }
+      return;
+    }
+    this.client = client;
     this.failureCount = 0;
     if (this.isFirstOpen) {
       this.isFirstOpen = false;
       // Defer the initial 'connected' so callers can register listeners after subscribeEvents() returns.
-      setImmediate(() => { if (!this.closed) this.emit('connected'); });
+      setImmediate(() => { if (!this.closed) this.safeEmit('connected'); });
     } else {
-      this.emit('connected');
+      this.safeEmit('connected');
     }
   }
 
+  private detach(client: PoolClient): void {
+    client.off('notification', this.boundNotification);
+    client.off('error', this.boundError);
+    client.off('end', this.boundEnd);
+  }
+
   private removeClientListeners(): void {
-    if (!this.client) return;
-    this.client.off('notification', this.boundNotification);
-    this.client.off('error', this.boundError);
-    this.client.off('end', this.boundEnd);
+    if (this.client) this.detach(this.client);
   }
 
   private onClientLost(err: unknown): void {
@@ -130,11 +152,17 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
   private scheduleReconnect(): void {
     if (this.closed) return;
     const delayMs = this.computeBackoffMs();
+    let canceller!: () => void;
     const wait = new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, delayMs);
-      this.reconnectCancellers.push(() => { clearTimeout(timer); resolve(); });
+      canceller = () => { clearTimeout(timer); resolve(); };
+      this.reconnectCancellers.push(canceller);
     });
     void wait.then(async () => {
+      // This attempt's timer has fired (or was cancelled) — drop its canceller so
+      // the array can't grow unbounded across a flapping connection's lifetime.
+      const i = this.reconnectCancellers.indexOf(canceller);
+      if (i !== -1) this.reconnectCancellers.splice(i, 1);
       if (this.closed) return;
       try {
         await this.open();
@@ -154,7 +182,17 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
 
   private emitError(reason: ErrorReason, error: unknown): void {
     const event: BossierErrorEvent = { reason, error, at: new Date() };
-    this.emit('error', event);
+    // Dispatch directly, NOT via safeEmit — safeEmit's catch calls emitError,
+    // which would recurse on a throwing 'error' listener. Swallow listener
+    // throws (we can't raise an error *about* the error handler), and silently
+    // drop when there's no 'error' listener — sidestepping Node EventEmitter's
+    // "emit('error') with no listener throws" process-crash footgun, which a
+    // fail-open audit layer must never trip on the host.
+    for (const listener of this.listeners('error').slice()) {
+      try {
+        (listener as (e: BossierErrorEvent) => void)(event);
+      } catch { /* a failing error-handler cannot itself emit an error */ }
+    }
   }
 
   private safeEmit<K extends keyof BossierEventsMap>(
@@ -212,7 +250,7 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
         const warning: BossierWarningEvent = {
           unknownState: state, jobId: job_id, at: new Date(),
         };
-        this.emit('warning', warning);
+        this.safeEmit('warning', warning);
       }
     }
     this.safeEmit('job', jobEvent);          // then catch-all
