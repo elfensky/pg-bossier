@@ -29,7 +29,7 @@
         "pgbossier": "./bin/pgbossier.js"
     },
     "engines": {
-        "node": ">=18.3.0"
+        "node": ">=20.4.0"
     },
     "keywords": [
         "pg-boss",
