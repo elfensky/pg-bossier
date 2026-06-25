@@ -419,6 +419,8 @@ export function bossier(options: BossierOptions): Bossier {
       getProgress<TProgress>(readDb, s, jobId),
     setClaim: (jobId, ownerId) => setClaim(db, s, jobId, ownerId),
     getClaim: (jobId) => getClaim(readDb, s, jobId),
+    // Raw db (not readDb): an explicit probe must report the TRUE installed
+    // state, never fail-soft to a misleading "false".
     isBossierInstalled: () => isBossierInstalled(db, s),
     ensureInstalled,
     prune: (opts) => prune(db, s, opts),
@@ -441,7 +443,9 @@ export function bossier(options: BossierOptions): Bossier {
     getLiveState: <T = unknown>(jobId: string) => getLiveState<T>(boss, readDb, s, jobId),
     getLiveHeartbeat: (jobId) => getLiveHeartbeat(boss, readDb, s, jobId),
     getLiveHeartbeats: (jobIds) => getLiveHeartbeats(readDb, s, jobIds),
-    captureHealth: (opts) => captureHealth(readDb, s, opts),
+    // captureHealth uses the RAW db (not readDb): it must distinguish a missing
+    // install from a healthy-empty one, so it can't fail-soft to empty.
+    captureHealth: (opts) => captureHealth(db, s, opts),
   };
   const methodNames = new Set<string>(BOSSIER_METHOD_NAMES);
 

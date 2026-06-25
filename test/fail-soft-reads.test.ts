@@ -44,6 +44,21 @@ test('every record read fails soft (returns empty, never throws) when not instal
   warn.mockRestore();
 });
 
+test('setClaim returns false (quiet, no throw) when not installed', async () => {
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  await expect(client.setClaim(UUID, 'w1')).resolves.toBe(false);
+  expect(warn).not.toHaveBeenCalled(); // not-installed is a normal CAS false, not warned
+  warn.mockRestore();
+});
+
+test('captureHealth reports all-null when not installed (not a false-healthy 0/0)', async () => {
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  expect(await client.captureHealth()).toEqual({
+    lastCapturedSeq: null, lastCapturedAt: null, checked: null, missing: null,
+  });
+});
+
 test('reads work normally once installed', async () => {
   await install(h.pool);
   const client = bossier({ boss: h.boss, pool: h.pool });

@@ -10,7 +10,7 @@ import type { SchemaNames } from './sql.js';
  * keep the original text. An ORM adapter that wraps the error in an opaque shape
  * may not be recognized — then the read re-throws (best-effort fail-soft).
  */
-function isUndefinedTable(err: unknown): boolean {
+export function isUndefinedTable(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
   const e = err as { code?: unknown; message?: unknown };
   if (e.code === '42P01') return true;
@@ -32,6 +32,15 @@ let warned = false;
  * Any **other** error re-throws — a schema-name typo or a real DB fault must not
  * be masked as "no data". Used only for the client's *read* methods; the write
  * methods keep the raw `db` (they have their own fail-open try/catch).
+ *
+ * Match is by `undefined_table` only (not scoped to `pgbossier.record`), so the
+ * few reads that hit `pgboss.job` (`countByState`/`countByQueue` `{ live: true }`,
+ * `getLiveHeartbeats`) would also fail-soft if `pgboss.job` were missing — but
+ * that means pg-boss itself isn't installed, an already-catastrophic state the
+ * host sees everywhere, so masking it here is harmless. Scoping by table name
+ * was rejected: it relies on the error *message* (no structured relation field
+ * for 42P01), which an ORM adapter may reshape — and getting it wrong would
+ * silently break the more important fail-soft on the consumer's own ORM path.
  */
 export function softReadDb(db: BossierDb): BossierDb {
   return {

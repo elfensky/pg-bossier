@@ -1,5 +1,6 @@
 import type { BossierDb } from './db.js';
 import type { SchemaNames } from './sql.js';
+import { isBossierInstalled } from './installed.js';
 
 /**
  * A snapshot of capture health — for detecting silent drift, since capture is
@@ -73,6 +74,14 @@ export async function captureHealth(
     throw new Error(
       `sampleLimit must be a positive integer, got ${String(sampleLimit)}`,
     );
+  }
+
+  // Distinguish "not installed" from "installed but empty": without this probe a
+  // missing schema would 42P01 on every query and (via the read fail-soft path)
+  // report a falsely-healthy 0/0. captureHealth is wired to the RAW db (not the
+  // fail-soft readDb), so this probe — and the queries below — see the true state.
+  if (!(await isBossierInstalled(db, schemas))) {
+    return { lastCapturedSeq: null, lastCapturedAt: null, checked: null, missing: null };
   }
 
   const freshness = await db.query<{ seq: string | null; at: Date | null }>(

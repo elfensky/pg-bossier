@@ -1,6 +1,7 @@
 import type { BossierDb } from './db.js';
 import { UUID_RE } from './sql.js';
 import type { SchemaNames } from './sql.js';
+import { isUndefinedTable } from './installed.js';
 
 /**
  * Claim a job's *current* attempt for `ownerId` — compare-and-set (#41a).
@@ -42,19 +43,27 @@ export async function setClaim(
     return false;
   }
   try {
-    const { rowCount } = await db.query(
+    // RETURNING + rows.length, NOT rowCount: pg-boss's executeSql contract (the
+    // BYO/ORM path) guarantees only `{ rows }`, so rowCount is undefined on
+    // every ORM adapter — which would make this CAS *always* return false there.
+    const { rows } = await db.query<{ job_id: string }>(
       `UPDATE ${schemas.pgbossier}.record
          SET claimed_by = $2
        WHERE job_id = $1
          AND attempt = (
            SELECT max(attempt) FROM ${schemas.pgbossier}.record WHERE job_id = $1
          )
-         AND (claimed_by IS NULL OR claimed_by = $2)`,
+         AND (claimed_by IS NULL OR claimed_by = $2)
+       RETURNING job_id`,
       [jobId, ownerId],
     );
-    return (rowCount ?? 0) > 0;
+    return rows.length > 0;
   } catch (err) {
-    console.warn(`pgbossier: setClaim failed for job ${jobId}: ${String(err)}`);
+    // Quiet on a missing install (the documented normal `false` outcome); warn
+    // only on a real DB fault. Fail-open either way.
+    if (!isUndefinedTable(err)) {
+      console.warn(`pgbossier: setClaim failed for job ${jobId}: ${String(err)}`);
+    }
     return false;
   }
 }

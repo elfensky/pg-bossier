@@ -42,6 +42,18 @@ export interface PruneOptions {
  * `keepLastPerQueue`) throw. Runs one parameterized statement through the
  * existing `db` handle — no separate connection, BYO-connection friendly.
  * Returns the number of rows deleted.
+ *
+ * Assumes one queue per `job_id` (eligibility is resolved at the job's
+ * current-attempt queue, and the DELETE then removes that job_id's rows). That
+ * holds for every pg-bossier write path — pg-boss 12 partitions `pgboss.job` by
+ * queue, so a job id lives in exactly one queue, and the capture trigger always
+ * pairs an id with one queue. Hand-inserting the same id under two queues would
+ * break the assumption.
+ *
+ * Best run during a quiet window: it's a single non-locking statement, so a job
+ * a concurrent `boss.retry()` is moving out of a terminal state mid-prune could
+ * still be seen as done by this snapshot and pruned. Schedule it when retries
+ * aren't actively re-queuing terminal jobs.
  */
 export async function prune(
   db: BossierDb, schemas: SchemaNames, opts: PruneOptions = {},
@@ -75,7 +87,11 @@ export async function prune(
   const eligibleWhere = conds.join(' AND '); // intersection of the given bounds
 
   const t = `${schemas.pgbossier}.record`;
-  const { rowCount } = await db.query(
+  // RETURNING + rows.length, NOT rowCount: pg-boss's executeSql contract (the
+  // BYO/ORM path, db = boss.getDb()) guarantees only `{ rows }` — every ORM
+  // adapter (prisma/kysely/knex/drizzle) drops rowCount, so `rowCount` would be
+  // undefined and the deleted count silently wrong on those backends.
+  const { rows } = await db.query<{ job_id: string }>(
     `WITH current AS (
        SELECT DISTINCT ON (job_id) job_id, queue, state,
               coalesce(completed_on, captured_at) AS done_at
@@ -91,8 +107,9 @@ export async function prune(
      DELETE FROM ${t} r
        USING done d
       WHERE r.job_id = d.job_id
-        AND ${eligibleWhere}`,
+        AND ${eligibleWhere}
+      RETURNING r.job_id`,
     params,
   );
-  return { deleted: rowCount ?? 0 };
+  return { deleted: rows.length };
 }

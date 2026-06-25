@@ -57,6 +57,22 @@ test('setClaim is idempotent for the owner: re-claiming your own returns true', 
   expect(await getClaim(h.pool, SCHEMAS, jobId)).toBe('worker-A');
 });
 
+test('setClaim under contention: exactly one of two distinct owners wins', async () => {
+  const queue = 'claim-race';
+  await h.boss.createQueue(queue);
+  const jobId = (await h.boss.send(queue, {}))!;
+  // Two genuinely-concurrent claims (separate pool connections). The CAS
+  // predicate `AND (claimed_by IS NULL OR claimed_by = $2)` is atomic per row,
+  // so Postgres row-locking lets exactly one win.
+  const [a, b] = await Promise.all([
+    setClaim(h.pool, SCHEMAS, jobId, 'worker-A'),
+    setClaim(h.pool, SCHEMAS, jobId, 'worker-B'),
+  ]);
+  expect([a, b].filter(Boolean).length).toBe(1); // exactly one true
+  const owner = await getClaim(h.pool, SCHEMAS, jobId);
+  expect(owner).toBe(a ? 'worker-A' : 'worker-B'); // winner matches the true result
+});
+
 test('getClaim returns the most-recent owner', async () => {
   const queue = 'claim-get';
   await h.boss.createQueue(queue);

@@ -33,6 +33,14 @@ async function applySchema(client: PoolClient, s: SchemaNames): Promise<void> {
   // half-built.
   await client.query('BEGIN');
   try {
+    // Serialize concurrent install/migrate across processes/replicas (#39
+    // autoMigrate): a transaction-scoped advisory lock keyed by the pgbossier
+    // schema name. Without it, two replicas racing to migrate can collide on
+    // CREATE/ALTER ... IF NOT EXISTS / CREATE OR REPLACE (Postgres doesn't fully
+    // serialize those existence checks). The loser now waits for the winner's
+    // COMMIT, then its own IF NOT EXISTS steps see everything present and no-op.
+    // Released automatically at COMMIT/ROLLBACK. Distinct schemas → distinct keys.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`pgbossier:${s.pgbossier}`]);
     await client.query(schemaSql(s));
     await client.query(sequenceSql(s));
     await client.query(recordTableSql(s));
