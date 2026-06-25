@@ -148,14 +148,16 @@ export interface BossierMethods {
     jobId: string,
   ) => Promise<ProgressResult<TProgress> | null>;
   /**
-   * Write a job's claim owner (e.g. the worker that pulled it) to its current
-   * attempt's `claimed_by`. Per-attempt, so a retry's owner is recorded
-   * separately. Useful when an external pull-worker must prove ownership of an
-   * active job (the consumer reads it back via {@link getClaim} to authorize
-   * progress/complete/fail). Fail-open; throws only if `ownerId` isn't a
-   * non-empty string.
+   * Claim a job's current attempt for `ownerId` — compare-and-set (#41a).
+   * Writes `claimed_by` only if the current attempt is unclaimed or already owned
+   * by `ownerId`, and resolves to whether `ownerId` holds the claim afterwards:
+   * `true` = won/owns it, `false` = lost to another owner (or unknown job / not
+   * installed). Idempotent for the owner. Lets a pull-worker treat the marker as
+   * authoritative (two racers → exactly one `true`) without relying on pg-boss's
+   * `fetch()` to serialize claimants. Per-attempt, so a retry's owner is recorded
+   * separately. Fail-open; throws only if `ownerId` isn't a non-empty string.
    */
-  setClaim: (jobId: string, ownerId: string) => Promise<void>;
+  setClaim: (jobId: string, ownerId: string) => Promise<boolean>;
   /**
    * Read a job's claim owner — the `claimed_by` of its current (latest)
    * attempt, matching where {@link BossierMethods.setClaim} writes. `null` if
