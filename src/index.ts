@@ -33,4 +33,4 @@ export { getLiveState, getLiveHeartbeat, getLiveHeartbeats } from './live.js';
 export type { LiveState } from './live.js';
 export { captureHealth } from './health.js';
 export type { CaptureHealth } from './health.js';
-export { isInstalled } from './installed.js';
+export { isBossierInstalled } from './installed.js';

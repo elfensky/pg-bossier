@@ -17,7 +17,8 @@ import {
 import { subscribeEvents, type BossierEvents, type SubscribeOptions } from './events.js';
 import { getLiveState, getLiveHeartbeat, getLiveHeartbeats, type LiveState } from './live.js';
 import { captureHealth, type CaptureHealth } from './health.js';
-import { softReadDb, isInstalled } from './installed.js';
+import { softReadDb, isBossierInstalled } from './installed.js';
+import { migrate } from './install.js';
 import { resolveSchemas, type SchemaNames } from './sql.js';
 import { pgBossDb, type BossierDb } from './db.js';
 
@@ -46,6 +47,24 @@ export interface BossierOptions {
   schema?: string;
   /** Where pg-boss installed itself. Default: 'pgboss'. */
   pgbossSchema?: string;
+  /**
+   * Provision pg-bossier's schema at startup (#39). When `true`, `bossier()`
+   * eagerly runs the idempotent, additive, transactional {@link migrate} once —
+   * mirroring how pg-boss migrates itself at `boss.start()` — so a fresh env or
+   * a forgotten `migrate` after a dep bump can't leave the now-load-bearing
+   * chronicle un-provisioned. The DDL is `IF NOT EXISTS` / `CREATE OR REPLACE`
+   * inside `BEGIN/COMMIT`, so concurrent instances racing to migrate is a safe
+   * no-op for the losers.
+   *
+   * **Requires a real `pool`** (the transactional installer needs
+   * `pool.connect()` — a BYO `db`/ORM adapter can't run `BEGIN/COMMIT` on a
+   * dedicated session); `bossier()` throws synchronously if `autoMigrate: true`
+   * without one. The constructor stays sync — the migration runs in the
+   * background; `await client.ensureInstalled()` for a hard barrier before the
+   * first job. Default `false` (keep the explicit `install()`/`migrate()` /
+   * CLI path).
+   */
+  autoMigrate?: boolean;
 }
 
 /**
@@ -234,8 +253,26 @@ export interface BossierMethods {
    * The client's *read* methods are fail-soft against a missing install (return
    * empty + warn once), symmetric with the fail-open writes — this is the
    * explicit probe to gate on.
+   *
+   * Named `isBossierInstalled` (not `isInstalled`) so it doesn't shadow pg-boss's
+   * own `isInstalled()` — that one (pg-boss's schema) stays reachable through the
+   * client.
    */
-  isInstalled: () => Promise<boolean>;
+  isBossierInstalled: () => Promise<boolean>;
+  /**
+   * Ensure pg-bossier's schema is installed, running the idempotent {@link migrate}
+   * **once** and resolving when it has (#39). Safe to call (and `await`) any
+   * number of times — concurrent calls share the one in-flight migration; a
+   * successful migration is cached; a *failed* one is not, so a later call
+   * retries (e.g. after a transient startup DB blip). With `autoMigrate: true`
+   * this already runs in the background at construction — `await ensureInstalled()`
+   * to block until the schema is ready before enqueuing/working the first job.
+   *
+   * **Requires a real `pool`** (transactional installer); rejects with a clear
+   * error otherwise. This is the only schema-write method on the client — reads
+   * stay fail-soft and writes fail-open regardless.
+   */
+  ensureInstalled: () => Promise<void>;
 }
 
 /**
@@ -266,7 +303,7 @@ export const BOSSIER_METHOD_NAMES = [
   'subscribeEvents', 'getEventsSince',
   'getLiveState', 'getLiveHeartbeat', 'getLiveHeartbeats',
   'captureHealth',
-  'isInstalled',
+  'isBossierInstalled', 'ensureInstalled',
 ] as const satisfies readonly (keyof BossierMethods)[];
 
 /** `subscribeEvents` needs a real pg connection an ORM adapter can't provide. */
@@ -274,6 +311,13 @@ const SUBSCRIBE_EVENTS_NEEDS_POOL =
   'pgbossier: subscribeEvents requires a `pool` — LISTEN/NOTIFY needs a ' +
   'dedicated pg connection that ORM adapters do not expose. Construct the ' +
   'client as bossier({ boss, pool }).';
+
+/** `autoMigrate`/`ensureInstalled` need a real pg connection the transactional installer can use. */
+const AUTO_MIGRATE_NEEDS_POOL =
+  'pgbossier: autoMigrate/ensureInstalled requires a `pool` — the transactional ' +
+  'installer needs pool.connect() for BEGIN/COMMIT, which a BYO db/ORM adapter ' +
+  'does not expose. Construct the client as bossier({ boss, pool }), or run ' +
+  'install()/migrate() out of band.';
 
 /**
  * Wrap a started pg-boss instance into a single client that exposes pg-boss's
@@ -299,6 +343,35 @@ export function bossier(options: BossierOptions): Bossier {
     pgbossier: options.schema,
     pgboss:    options.pgbossSchema,
   });
+
+  // #39: opt-in startup provisioning. ensureInstalled() runs migrate() once via
+  // a cached promise; a *failed* migration clears the cache so a later call can
+  // retry (transient startup DB blip). Needs a real pool — the transactional
+  // installer uses pool.connect().
+  let ensurePromise: Promise<void> | undefined;
+  const ensureInstalled = (): Promise<void> => {
+    if (pool === undefined) return Promise.reject(new Error(AUTO_MIGRATE_NEEDS_POOL));
+    ensurePromise ??= migrate(pool, {
+      schema: options.schema, pgbossSchema: options.pgbossSchema,
+    }).catch((err: unknown) => {
+      ensurePromise = undefined; // failed → allow a retry on the next call
+      throw err;
+    });
+    return ensurePromise;
+  };
+  if (options.autoMigrate === true) {
+    // Fail fast: autoMigrate without a pool is a programmer error.
+    if (pool === undefined) throw new Error(AUTO_MIGRATE_NEEDS_POOL);
+    // Kick the migration off now; the constructor stays sync. Swallow the
+    // rejection here so it isn't unhandled — an awaiter of ensureInstalled()
+    // still sees it (same cached promise), and reads are fail-soft meanwhile.
+    void ensureInstalled().catch((err: unknown) => {
+      console.warn(
+        `pgbossier: autoMigrate failed at startup: ${String(err)}. Reads stay ` +
+        `fail-soft; await ensureInstalled() to observe/retry.`,
+      );
+    });
+  }
 
   const methods: BossierMethods = {
     sendTracked: (queue, data, options) => {
@@ -332,7 +405,8 @@ export function bossier(options: BossierOptions): Bossier {
       getProgress<TProgress>(readDb, s, jobId),
     setClaim: (jobId, ownerId) => setClaim(db, s, jobId, ownerId),
     getClaim: (jobId) => getClaim(readDb, s, jobId),
-    isInstalled: () => isInstalled(db, s),
+    isBossierInstalled: () => isBossierInstalled(db, s),
+    ensureInstalled,
     recordInputSnapshot: (jobId, attempt, snapshot) =>
       recordInputSnapshot(db, s, jobId, attempt, snapshot),
     // Overloaded: dispatch at the call site to land on each of the underlying

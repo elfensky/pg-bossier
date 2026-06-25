@@ -6,7 +6,7 @@ import { bossier } from '../src/client.js';
 // #40: pg-boss is started but pg-bossier is NOT installed (startHarness does not
 // install). Reads must fail-soft (return empty, not throw a raw 42P01) so a
 // forgotten migrate degrades instead of 500ing the host's request path — and
-// isInstalled() reports the state for an explicit startup gate.
+// isBossierInstalled() reports the state for an explicit startup gate.
 
 const UUID = '00000000-0000-0000-0000-000000000000';
 
@@ -14,11 +14,11 @@ let h: Harness;
 beforeEach(async () => { h = await startHarness(); }); // NOTE: no install()
 afterEach(async () => { await h.teardown(); });
 
-test('isInstalled() is false before install, true after', async () => {
+test('isBossierInstalled() is false before install, true after', async () => {
   const client = bossier({ boss: h.boss, pool: h.pool });
-  expect(await client.isInstalled()).toBe(false);
+  expect(await client.isBossierInstalled()).toBe(false);
   await install(h.pool);
-  expect(await client.isInstalled()).toBe(true);
+  expect(await client.isBossierInstalled()).toBe(true);
 });
 
 test('every record read fails soft (returns empty, never throws) when not installed', async () => {

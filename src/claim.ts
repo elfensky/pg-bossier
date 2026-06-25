@@ -24,7 +24,7 @@ import type { SchemaNames } from './sql.js';
  * `console.warn` and swallowed (returns `false`) — a failed claim write must
  * never fail the consumer's job. A `false` from a no-matching-row UPDATE is a
  * normal CAS outcome (lost / unknown / not installed), not warned — check
- * `isInstalled()` (#40) to distinguish "not installed" up front. The only throw
+ * `isBossierInstalled()` (#40) to distinguish "not installed" up front. The only throw
  * path is argument validation: `ownerId` must be a non-empty string.
  */
 export async function setClaim(

@@ -61,8 +61,11 @@ export function softReadDb(db: BossierDb): BossierDb {
  * call at startup to fail loudly/clearly instead of cryptically at first read.
  * `false` when the schema/table is absent (not yet installed). Does NOT itself
  * fail-soft: a genuine DB error propagates (you asked an explicit question).
+ *
+ * Named `isBossierInstalled` (not `isInstalled`) so it never shadows pg-boss's
+ * own `isInstalled()` on the facade — both stay reachable through the client.
  */
-export async function isInstalled(
+export async function isBossierInstalled(
   db: BossierDb, schemas: SchemaNames,
 ): Promise<boolean> {
   const { rows } = await db.query<{ present: boolean }>(
