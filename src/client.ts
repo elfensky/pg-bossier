@@ -216,8 +216,14 @@ export interface BossierMethods {
    * `lastCapturedAt`) plus a bounded coverage check (`checked` / `missing`) for
    * detecting silent fail-open capture drift. Observability only — capture stays
    * fail-open. See issue #31.
+   *
+   * Pass `{ coverage: false }` for a cheap **freshness-only** snapshot (#43) that
+   * skips the expensive coverage scan over `pgboss.job` — suitable for frequent
+   * polling; `checked` / `missing` come back `null`.
    */
-  captureHealth: (opts?: { sampleLimit?: number }) => Promise<CaptureHealth>;
+  captureHealth: (
+    opts?: { sampleLimit?: number; coverage?: boolean },
+  ) => Promise<CaptureHealth>;
 }
 
 /**
