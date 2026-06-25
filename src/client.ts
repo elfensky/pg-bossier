@@ -17,6 +17,7 @@ import {
 import { subscribeEvents, type BossierEvents, type SubscribeOptions } from './events.js';
 import { getLiveState, getLiveHeartbeat, getLiveHeartbeats, type LiveState } from './live.js';
 import { captureHealth, type CaptureHealth } from './health.js';
+import { softReadDb, isInstalled } from './installed.js';
 import { resolveSchemas, type SchemaNames } from './sql.js';
 import { pgBossDb, type BossierDb } from './db.js';
 
@@ -226,6 +227,15 @@ export interface BossierMethods {
   captureHealth: (
     opts?: { sampleLimit?: number; coverage?: boolean },
   ) => Promise<CaptureHealth>;
+  /**
+   * Is pg-bossier installed? A cheap `to_regclass` probe (#40) — call it at
+   * startup to fail loudly/clearly instead of cryptically at first read. `false`
+   * when the schema/table is absent (not yet `install()`-ed / `migrate()`-d).
+   * The client's *read* methods are fail-soft against a missing install (return
+   * empty + warn once), symmetric with the fail-open writes — this is the
+   * explicit probe to gate on.
+   */
+  isInstalled: () => Promise<boolean>;
 }
 
 /**
@@ -256,6 +266,7 @@ export const BOSSIER_METHOD_NAMES = [
   'subscribeEvents', 'getEventsSince',
   'getLiveState', 'getLiveHeartbeat', 'getLiveHeartbeats',
   'captureHealth',
+  'isInstalled',
 ] as const satisfies readonly (keyof BossierMethods)[];
 
 /** `subscribeEvents` needs a real pg connection an ORM adapter can't provide. */
@@ -280,6 +291,10 @@ export function bossier(options: BossierOptions): Bossier {
   // else pg-boss's own DB handle (so no separate pool is required). LISTEN/
   // NOTIFY (`subscribeEvents`) still needs a real `pool` — see requirePool.
   const db: BossierDb = options.db ?? pool ?? pgBossDb(boss);
+  // Reads route through a fail-soft wrapper: a query against an uninstalled
+  // pgbossier schema degrades to empty instead of 500ing the host (#40). Writes
+  // keep the raw `db` (they have their own fail-open try/catch).
+  const readDb: BossierDb = softReadDb(db);
   const s: SchemaNames = resolveSchemas({
     pgbossier: options.schema,
     pgboss:    options.pgbossSchema,
@@ -300,23 +315,24 @@ export function bossier(options: BossierOptions): Bossier {
     recordTerminalDetail: (jobId, attempt, payload) =>
       recordTerminalDetail(db, s, jobId, attempt, payload),
     recordDeadLetter: (args) => recordDeadLetter(db, s, args),
-    findDeadLetterSource: (dlqJobId) => findDeadLetterSource(db, s, dlqJobId),
-    findDeadLetterTarget: (sourceJobId) => findDeadLetterTarget(db, s, sourceJobId),
+    findDeadLetterSource: (dlqJobId) => findDeadLetterSource(readDb, s, dlqJobId),
+    findDeadLetterTarget: (sourceJobId) => findDeadLetterTarget(readDb, s, sourceJobId),
     findById: <TInput = unknown, TOutput = unknown>(jobId: string) =>
-      findById<TInput, TOutput>(db, s, jobId),
+      findById<TInput, TOutput>(readDb, s, jobId),
     getRetryHistory: <TInput = unknown, TOutput = unknown>(jobId: string) =>
-      getRetryHistory<TInput, TOutput>(db, s, jobId),
+      getRetryHistory<TInput, TOutput>(readDb, s, jobId),
     listJobs: <TInput = unknown, TOutput = unknown>(opts?: ListJobsOpts) =>
-      listJobs<TInput, TOutput>(db, s, opts),
-    latestPerQueue: (queues, opts) => latestPerQueue(db, s, queues, opts),
-    countByState: (filter) => countByState(db, s, filter),
-    countByQueue: (filter) => countByQueue(db, s, filter),
-    listLongRunning: (opts) => listLongRunning(db, s, opts),
+      listJobs<TInput, TOutput>(readDb, s, opts),
+    latestPerQueue: (queues, opts) => latestPerQueue(readDb, s, queues, opts),
+    countByState: (filter) => countByState(readDb, s, filter),
+    countByQueue: (filter) => countByQueue(readDb, s, filter),
+    listLongRunning: (opts) => listLongRunning(readDb, s, opts),
     setProgress: (jobId, progress) => setProgress(db, s, jobId, progress),
     getProgress: <TProgress = unknown>(jobId: string) =>
-      getProgress<TProgress>(db, s, jobId),
+      getProgress<TProgress>(readDb, s, jobId),
     setClaim: (jobId, ownerId) => setClaim(db, s, jobId, ownerId),
-    getClaim: (jobId) => getClaim(db, s, jobId),
+    getClaim: (jobId) => getClaim(readDb, s, jobId),
+    isInstalled: () => isInstalled(db, s),
     recordInputSnapshot: (jobId, attempt, snapshot) =>
       recordInputSnapshot(db, s, jobId, attempt, snapshot),
     // Overloaded: dispatch at the call site to land on each of the underlying
@@ -324,19 +340,19 @@ export function bossier(options: BossierOptions): Bossier {
     // wrapped-result overload; otherwise → the `T | null` overload.
     getInputSnapshot: <T = unknown>(jobId: string, attempt?: number) =>
       attempt === undefined
-        ? getInputSnapshot<T>(db, s, jobId)
-        : getInputSnapshot<T>(db, s, jobId, attempt),
+        ? getInputSnapshot<T>(readDb, s, jobId)
+        : getInputSnapshot<T>(readDb, s, jobId, attempt),
     subscribeEvents: (opts) =>
       pool === undefined
         ? Promise.reject(new Error(SUBSCRIBE_EVENTS_NEEDS_POOL))
         : subscribeEvents(pool, s, opts),
     getEventsSince: <TInput = unknown, TOutput = unknown>(
       since: bigint, limit?: number,
-    ) => getEventsSince<TInput, TOutput>(db, s, since, limit),
-    getLiveState: <T = unknown>(jobId: string) => getLiveState<T>(boss, db, s, jobId),
-    getLiveHeartbeat: (jobId) => getLiveHeartbeat(boss, db, s, jobId),
-    getLiveHeartbeats: (jobIds) => getLiveHeartbeats(db, s, jobIds),
-    captureHealth: (opts) => captureHealth(db, s, opts),
+    ) => getEventsSince<TInput, TOutput>(readDb, s, since, limit),
+    getLiveState: <T = unknown>(jobId: string) => getLiveState<T>(boss, readDb, s, jobId),
+    getLiveHeartbeat: (jobId) => getLiveHeartbeat(boss, readDb, s, jobId),
+    getLiveHeartbeats: (jobIds) => getLiveHeartbeats(readDb, s, jobIds),
+    captureHealth: (opts) => captureHealth(readDb, s, opts),
   };
   const methodNames = new Set<string>(BOSSIER_METHOD_NAMES);
 
