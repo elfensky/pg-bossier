@@ -121,6 +121,19 @@ await uninstall(pool);  // DROP SCHEMA pgbossier CASCADE
 `install()` is idempotent. Run it once at app boot or in a one-shot
 migration script.
 
+### Auto-provision at startup
+
+If pg-bossier sits on a critical path (e.g. `setClaim`/`getClaim` for worker auth, or `getProgress`), a forgotten migration is an outage. Opt into provisioning at construction with `autoMigrate` — it runs the idempotent `migrate()` once, mirroring how pg-boss migrates itself at `boss.start()`:
+
+```ts
+const client = bossier({ boss, pool, autoMigrate: true });
+await client.ensureInstalled(); // optional hard barrier before the first job
+```
+
+- `autoMigrate: true` kicks the migration off in the (sync) constructor; `ensureInstalled()` returns the one cached migration promise — `await` it to block until the schema is ready. A *failed* migration isn't cached, so a later `ensureInstalled()` retries.
+- Both need a real `pool` (the transactional installer uses `pool.connect()`): `ensureInstalled()` rejects without one, and `autoMigrate: true` throws at construction. Concurrent replicas racing to migrate is safe — a transaction-scoped advisory lock serializes them.
+- `await client.isBossierInstalled()` is a cheap probe (named so it doesn't shadow pg-boss's own `isInstalled()`) to gate on at startup. The client's *read* methods are fail-soft if the schema is absent (they return empty + warn once rather than throw), symmetric with the fail-open writes — so a missing migration degrades instead of taking down the request path.
+
 ### Upgrading (non-destructive)
 
 To move an already-adopted install to a newer pg-bossier version, call
@@ -311,6 +324,8 @@ if (h.missing > 0) alert('capture dropped rows');
 ```
 
 The coverage check looks at the most-recent live jobs (default 1000, `{ sampleLimit }` to widen). It is **not an O(1) probe** — finding the most-recent N means an `ORDER BY created_on DESC LIMIT` over `pgboss.job`, which scans/sorts proportional to the live-job count on a large queue (`sampleLimit` bounds the result, not the scan). **Run it periodically (cron / an admin health job), not on a hot per-request path.** The freshness half (`lastCapturedSeq`/`lastCapturedAt`) is cheap; the coverage half is the expensive one. Observability only — it never changes capture behaviour, which stays fail-open.
+
+For cheap frequent polling, pass `{ coverage: false }` to run only the freshness query and skip the coverage scan entirely; `checked` / `missing` come back `null` (distinguishable from a genuine `0`). When pg-bossier isn't installed, **all four fields are `null`** — distinct from an installed-but-empty `{ …, checked: 0, missing: 0 }` — so guard `missing` (e.g. `if (h.missing && h.missing > 0)`) before alarming.
 
 ### Writing pg-bossier-owned columns
 
@@ -568,10 +583,14 @@ import type { ProgressResult } from 'pg-bossier';
 
 ### Job claim owner
 
-`setClaim` records *which worker owns a job's current attempt* — e.g. the id of an external pull-worker that fetched it. Like `setProgress`, the target attempt is resolved server-side (a worker needs only `job.id`), it is per-attempt (a retry's owner is recorded separately, so "who ran attempt N?" stays answerable), and it is fail-open (a failed write warns and never fails the consumer's job). It throws only if `ownerId` is not a non-empty string.
+`setClaim` claims *a job's current attempt* for a worker — e.g. an external pull-worker that fetched it — as a **compare-and-set**: it writes `claimed_by` only if the current attempt is unclaimed or already owned by the same worker, and returns whether that worker holds the claim afterwards. Two workers racing to claim the same attempt → exactly one gets `true`; it's idempotent for the owner (re-asserting your own claim returns `true`). So a pull-worker can treat the marker as authoritative without relying on pg-boss's `fetch()` to serialize claimants. Like `setProgress`, the target attempt is resolved server-side (a worker needs only `job.id`), it's per-attempt (a retry's owner is recorded separately), and it's fail-open (a DB error warns and returns `false`; a missing install is a quiet `false`). It throws only if `ownerId` is not a non-empty string.
 
 ```ts
-await client.setClaim(job.id, workerId);
+if (await client.setClaim(job.id, workerId)) {
+  // won (or already own it) → safe to process
+} else {
+  // lost the claim to another worker (or job unknown / not installed) → skip
+}
 ```
 
 `getClaim` returns the `claimed_by` of the job's **current** (latest) attempt — matching where `setClaim` writes — or `null` if the current attempt was never claimed (or the job is unknown). It is current-attempt-scoped on purpose: a pull-worker architecture can use it to authorize a later progress/complete/fail call without a stale owner from a prior failed/retried attempt satisfying the check (a fresh retry attempt reads back as unclaimed until its worker calls `setClaim`).
@@ -624,6 +643,19 @@ For a job that fails once and then succeeds (retryLimit = 1), the consumer sees 
 **Unsupported topologies.** PgBouncer in transaction-pool mode silently breaks `LISTEN`. Use session-pool mode, a direct Postgres connection, or skip PgBouncer for the subscriber's connection. See [`COMPATIBILITY.md`](./COMPATIBILITY.md).
 
 **MaxListenersExceededWarning.** If you add many `'job'` listeners (e.g. for metrics fan-out), call `events.setMaxListeners(0)` to suppress Node's 10-listener default warning.
+
+### Retention
+
+The `pgbossier.record` chronicle is append/upsert-only and intentionally outlives pg-boss's GC — that durability is the point. pg-bossier never prunes on its own (no scheduler, no TTL); *you* decide when to trim, with the `prune()` primitive so you don't hand-write `DELETE`s against the internal schema:
+
+```ts
+// keep 90 days of done jobs
+await client.prune({ olderThan: new Date(Date.now() - 90 * 864e5) });
+// or keep the 500 most-recently-completed per queue
+const { deleted } = await client.prune({ keepLastPerQueue: 500 });
+```
+
+It only ever deletes **fully-done** jobs (current attempt `completed`/`failed`/`cancelled`) and deletes them whole (all attempts); an **in-flight job is never touched**. At least one bound is required (a no-arg call throws rather than wipe everything); with both, a job must violate both to be deleted. Returns `{ deleted }` (rows removed). Not fail-open — it's an explicit maintenance call, so errors propagate; best run during a quiet window (see the `prune` JSDoc).
 
 ### Uninstall
 

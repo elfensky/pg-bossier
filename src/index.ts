@@ -33,3 +33,6 @@ export { getLiveState, getLiveHeartbeat, getLiveHeartbeats } from './live.js';
 export type { LiveState } from './live.js';
 export { captureHealth } from './health.js';
 export type { CaptureHealth } from './health.js';
+export { isBossierInstalled } from './installed.js';
+export { prune } from './prune.js';
+export type { PruneOptions } from './prune.js';

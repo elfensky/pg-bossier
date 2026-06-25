@@ -17,6 +17,9 @@ import {
 import { subscribeEvents, type BossierEvents, type SubscribeOptions } from './events.js';
 import { getLiveState, getLiveHeartbeat, getLiveHeartbeats, type LiveState } from './live.js';
 import { captureHealth, type CaptureHealth } from './health.js';
+import { softReadDb, isBossierInstalled } from './installed.js';
+import { prune, type PruneOptions } from './prune.js';
+import { migrate } from './install.js';
 import { resolveSchemas, type SchemaNames } from './sql.js';
 import { pgBossDb, type BossierDb } from './db.js';
 
@@ -45,6 +48,24 @@ export interface BossierOptions {
   schema?: string;
   /** Where pg-boss installed itself. Default: 'pgboss'. */
   pgbossSchema?: string;
+  /**
+   * Provision pg-bossier's schema at startup (#39). When `true`, `bossier()`
+   * eagerly runs the idempotent, additive, transactional {@link migrate} once —
+   * mirroring how pg-boss migrates itself at `boss.start()` — so a fresh env or
+   * a forgotten `migrate` after a dep bump can't leave the now-load-bearing
+   * chronicle un-provisioned. The DDL is `IF NOT EXISTS` / `CREATE OR REPLACE`
+   * inside `BEGIN/COMMIT`, so concurrent instances racing to migrate is a safe
+   * no-op for the losers.
+   *
+   * **Requires a real `pool`** (the transactional installer needs
+   * `pool.connect()` — a BYO `db`/ORM adapter can't run `BEGIN/COMMIT` on a
+   * dedicated session); `bossier()` throws synchronously if `autoMigrate: true`
+   * without one. The constructor stays sync — the migration runs in the
+   * background; `await client.ensureInstalled()` for a hard barrier before the
+   * first job. Default `false` (keep the explicit `install()`/`migrate()` /
+   * CLI path).
+   */
+  autoMigrate?: boolean;
 }
 
 /**
@@ -148,14 +169,16 @@ export interface BossierMethods {
     jobId: string,
   ) => Promise<ProgressResult<TProgress> | null>;
   /**
-   * Write a job's claim owner (e.g. the worker that pulled it) to its current
-   * attempt's `claimed_by`. Per-attempt, so a retry's owner is recorded
-   * separately. Useful when an external pull-worker must prove ownership of an
-   * active job (the consumer reads it back via {@link getClaim} to authorize
-   * progress/complete/fail). Fail-open; throws only if `ownerId` isn't a
-   * non-empty string.
+   * Claim a job's current attempt for `ownerId` — compare-and-set (#41a).
+   * Writes `claimed_by` only if the current attempt is unclaimed or already owned
+   * by `ownerId`, and resolves to whether `ownerId` holds the claim afterwards:
+   * `true` = won/owns it, `false` = lost to another owner (or unknown job / not
+   * installed). Idempotent for the owner. Lets a pull-worker treat the marker as
+   * authoritative (two racers → exactly one `true`) without relying on pg-boss's
+   * `fetch()` to serialize claimants. Per-attempt, so a retry's owner is recorded
+   * separately. Fail-open; throws only if `ownerId` isn't a non-empty string.
    */
-  setClaim: (jobId: string, ownerId: string) => Promise<void>;
+  setClaim: (jobId: string, ownerId: string) => Promise<boolean>;
   /**
    * Read a job's claim owner — the `claimed_by` of its current (latest)
    * attempt, matching where {@link BossierMethods.setClaim} writes. `null` if
@@ -216,8 +239,53 @@ export interface BossierMethods {
    * `lastCapturedAt`) plus a bounded coverage check (`checked` / `missing`) for
    * detecting silent fail-open capture drift. Observability only — capture stays
    * fail-open. See issue #31.
+   *
+   * Pass `{ coverage: false }` for a cheap **freshness-only** snapshot (#43) that
+   * skips the expensive coverage scan over `pgboss.job` — suitable for frequent
+   * polling; `checked` / `missing` come back `null`.
    */
-  captureHealth: (opts?: { sampleLimit?: number }) => Promise<CaptureHealth>;
+  captureHealth: (
+    opts?: { sampleLimit?: number; coverage?: boolean },
+  ) => Promise<CaptureHealth>;
+  /**
+   * Is pg-bossier installed? A cheap `to_regclass` probe (#40) — call it at
+   * startup to fail loudly/clearly instead of cryptically at first read. `false`
+   * when the schema/table is absent (not yet `install()`-ed / `migrate()`-d).
+   * The client's *read* methods are fail-soft against a missing install (return
+   * empty + warn once), symmetric with the fail-open writes — this is the
+   * explicit probe to gate on.
+   *
+   * Named `isBossierInstalled` (not `isInstalled`) so it doesn't shadow pg-boss's
+   * own `isInstalled()` — that one (pg-boss's schema) stays reachable through the
+   * client.
+   */
+  isBossierInstalled: () => Promise<boolean>;
+  /**
+   * Ensure pg-bossier's schema is installed, running the idempotent {@link migrate}
+   * **once** and resolving when it has (#39). Safe to call (and `await`) any
+   * number of times — concurrent calls share the one in-flight migration; a
+   * successful migration is cached; a *failed* one is not, so a later call
+   * retries (e.g. after a transient startup DB blip). With `autoMigrate: true`
+   * this already runs in the background at construction — `await ensureInstalled()`
+   * to block until the schema is ready before enqueuing/working the first job.
+   *
+   * **Requires a real `pool`** (transactional installer); rejects with a clear
+   * error otherwise. This is the only schema-write method on the client — reads
+   * stay fail-soft and writes fail-open regardless.
+   */
+  ensureInstalled: () => Promise<void>;
+  /**
+   * Retention **primitive** (#42): delete chronicle rows for **fully-done** jobs
+   * (current attempt terminal) bounded by `olderThan` and/or `keepLastPerQueue`,
+   * so the durability table doesn't grow without bound. In-flight jobs (current
+   * attempt non-terminal) are never touched; an eligible done job is deleted
+   * whole (all attempts). At least one bound is required (a no-arg call throws);
+   * with both, a job must violate both to be deleted. The retention *policy*
+   * (when to call this) stays consumer-owned — pg-bossier never prunes on its
+   * own. Returns the number of rows deleted. Not fail-open: an explicit
+   * maintenance call, so DB errors propagate.
+   */
+  prune: (opts?: PruneOptions) => Promise<{ deleted: number }>;
 }
 
 /**
@@ -248,6 +316,8 @@ export const BOSSIER_METHOD_NAMES = [
   'subscribeEvents', 'getEventsSince',
   'getLiveState', 'getLiveHeartbeat', 'getLiveHeartbeats',
   'captureHealth',
+  'isBossierInstalled', 'ensureInstalled',
+  'prune',
 ] as const satisfies readonly (keyof BossierMethods)[];
 
 /** `subscribeEvents` needs a real pg connection an ORM adapter can't provide. */
@@ -255,6 +325,13 @@ const SUBSCRIBE_EVENTS_NEEDS_POOL =
   'pgbossier: subscribeEvents requires a `pool` — LISTEN/NOTIFY needs a ' +
   'dedicated pg connection that ORM adapters do not expose. Construct the ' +
   'client as bossier({ boss, pool }).';
+
+/** `autoMigrate`/`ensureInstalled` need a real pg connection the transactional installer can use. */
+const AUTO_MIGRATE_NEEDS_POOL =
+  'pgbossier: autoMigrate/ensureInstalled requires a `pool` — the transactional ' +
+  'installer needs pool.connect() for BEGIN/COMMIT, which a BYO db/ORM adapter ' +
+  'does not expose. Construct the client as bossier({ boss, pool }), or run ' +
+  'install()/migrate() out of band.';
 
 /**
  * Wrap a started pg-boss instance into a single client that exposes pg-boss's
@@ -272,10 +349,43 @@ export function bossier(options: BossierOptions): Bossier {
   // else pg-boss's own DB handle (so no separate pool is required). LISTEN/
   // NOTIFY (`subscribeEvents`) still needs a real `pool` — see requirePool.
   const db: BossierDb = options.db ?? pool ?? pgBossDb(boss);
+  // Reads route through a fail-soft wrapper: a query against an uninstalled
+  // pgbossier schema degrades to empty instead of 500ing the host (#40). Writes
+  // keep the raw `db` (they have their own fail-open try/catch).
+  const readDb: BossierDb = softReadDb(db);
   const s: SchemaNames = resolveSchemas({
     pgbossier: options.schema,
     pgboss:    options.pgbossSchema,
   });
+
+  // #39: opt-in startup provisioning. ensureInstalled() runs migrate() once via
+  // a cached promise; a *failed* migration clears the cache so a later call can
+  // retry (transient startup DB blip). Needs a real pool — the transactional
+  // installer uses pool.connect().
+  let ensurePromise: Promise<void> | undefined;
+  const ensureInstalled = (): Promise<void> => {
+    if (pool === undefined) return Promise.reject(new Error(AUTO_MIGRATE_NEEDS_POOL));
+    ensurePromise ??= migrate(pool, {
+      schema: options.schema, pgbossSchema: options.pgbossSchema,
+    }).catch((err: unknown) => {
+      ensurePromise = undefined; // failed → allow a retry on the next call
+      throw err;
+    });
+    return ensurePromise;
+  };
+  if (options.autoMigrate === true) {
+    // Fail fast: autoMigrate without a pool is a programmer error.
+    if (pool === undefined) throw new Error(AUTO_MIGRATE_NEEDS_POOL);
+    // Kick the migration off now; the constructor stays sync. Swallow the
+    // rejection here so it isn't unhandled — an awaiter of ensureInstalled()
+    // still sees it (same cached promise), and reads are fail-soft meanwhile.
+    void ensureInstalled().catch((err: unknown) => {
+      console.warn(
+        `pgbossier: autoMigrate failed at startup: ${String(err)}. Reads stay ` +
+        `fail-soft; await ensureInstalled() to observe/retry.`,
+      );
+    });
+  }
 
   const methods: BossierMethods = {
     sendTracked: (queue, data, options) => {
@@ -292,23 +402,28 @@ export function bossier(options: BossierOptions): Bossier {
     recordTerminalDetail: (jobId, attempt, payload) =>
       recordTerminalDetail(db, s, jobId, attempt, payload),
     recordDeadLetter: (args) => recordDeadLetter(db, s, args),
-    findDeadLetterSource: (dlqJobId) => findDeadLetterSource(db, s, dlqJobId),
-    findDeadLetterTarget: (sourceJobId) => findDeadLetterTarget(db, s, sourceJobId),
+    findDeadLetterSource: (dlqJobId) => findDeadLetterSource(readDb, s, dlqJobId),
+    findDeadLetterTarget: (sourceJobId) => findDeadLetterTarget(readDb, s, sourceJobId),
     findById: <TInput = unknown, TOutput = unknown>(jobId: string) =>
-      findById<TInput, TOutput>(db, s, jobId),
+      findById<TInput, TOutput>(readDb, s, jobId),
     getRetryHistory: <TInput = unknown, TOutput = unknown>(jobId: string) =>
-      getRetryHistory<TInput, TOutput>(db, s, jobId),
+      getRetryHistory<TInput, TOutput>(readDb, s, jobId),
     listJobs: <TInput = unknown, TOutput = unknown>(opts?: ListJobsOpts) =>
-      listJobs<TInput, TOutput>(db, s, opts),
-    latestPerQueue: (queues, opts) => latestPerQueue(db, s, queues, opts),
-    countByState: (filter) => countByState(db, s, filter),
-    countByQueue: (filter) => countByQueue(db, s, filter),
-    listLongRunning: (opts) => listLongRunning(db, s, opts),
+      listJobs<TInput, TOutput>(readDb, s, opts),
+    latestPerQueue: (queues, opts) => latestPerQueue(readDb, s, queues, opts),
+    countByState: (filter) => countByState(readDb, s, filter),
+    countByQueue: (filter) => countByQueue(readDb, s, filter),
+    listLongRunning: (opts) => listLongRunning(readDb, s, opts),
     setProgress: (jobId, progress) => setProgress(db, s, jobId, progress),
     getProgress: <TProgress = unknown>(jobId: string) =>
-      getProgress<TProgress>(db, s, jobId),
+      getProgress<TProgress>(readDb, s, jobId),
     setClaim: (jobId, ownerId) => setClaim(db, s, jobId, ownerId),
-    getClaim: (jobId) => getClaim(db, s, jobId),
+    getClaim: (jobId) => getClaim(readDb, s, jobId),
+    // Raw db (not readDb): an explicit probe must report the TRUE installed
+    // state, never fail-soft to a misleading "false".
+    isBossierInstalled: () => isBossierInstalled(db, s),
+    ensureInstalled,
+    prune: (opts) => prune(db, s, opts),
     recordInputSnapshot: (jobId, attempt, snapshot) =>
       recordInputSnapshot(db, s, jobId, attempt, snapshot),
     // Overloaded: dispatch at the call site to land on each of the underlying
@@ -316,18 +431,20 @@ export function bossier(options: BossierOptions): Bossier {
     // wrapped-result overload; otherwise → the `T | null` overload.
     getInputSnapshot: <T = unknown>(jobId: string, attempt?: number) =>
       attempt === undefined
-        ? getInputSnapshot<T>(db, s, jobId)
-        : getInputSnapshot<T>(db, s, jobId, attempt),
+        ? getInputSnapshot<T>(readDb, s, jobId)
+        : getInputSnapshot<T>(readDb, s, jobId, attempt),
     subscribeEvents: (opts) =>
       pool === undefined
         ? Promise.reject(new Error(SUBSCRIBE_EVENTS_NEEDS_POOL))
         : subscribeEvents(pool, s, opts),
     getEventsSince: <TInput = unknown, TOutput = unknown>(
       since: bigint, limit?: number,
-    ) => getEventsSince<TInput, TOutput>(db, s, since, limit),
-    getLiveState: <T = unknown>(jobId: string) => getLiveState<T>(boss, db, s, jobId),
-    getLiveHeartbeat: (jobId) => getLiveHeartbeat(boss, db, s, jobId),
-    getLiveHeartbeats: (jobIds) => getLiveHeartbeats(db, s, jobIds),
+    ) => getEventsSince<TInput, TOutput>(readDb, s, since, limit),
+    getLiveState: <T = unknown>(jobId: string) => getLiveState<T>(boss, readDb, s, jobId),
+    getLiveHeartbeat: (jobId) => getLiveHeartbeat(boss, readDb, s, jobId),
+    getLiveHeartbeats: (jobIds) => getLiveHeartbeats(readDb, s, jobIds),
+    // captureHealth uses the RAW db (not readDb): it must distinguish a missing
+    // install from a healthy-empty one, so it can't fail-soft to empty.
     captureHealth: (opts) => captureHealth(db, s, opts),
   };
   const methodNames = new Set<string>(BOSSIER_METHOD_NAMES);

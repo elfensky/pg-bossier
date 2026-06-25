@@ -63,3 +63,25 @@ test('sampleLimit validation rejects bad input', async () => {
   await expect(client.captureHealth({ sampleLimit: 0 })).rejects.toThrow(/positive integer/);
   await expect(client.captureHealth({ sampleLimit: -1 })).rejects.toThrow(/positive integer/);
 });
+
+// #43: freshness-only mode skips the expensive coverage ORDER BY for cheap
+// periodic polling; checked/missing come back null (≠ a real 0).
+test('{ coverage: false } returns freshness only, skips the coverage check', async () => {
+  const queue = 'health-fresh-only';
+  await h.boss.createQueue(queue);
+  await h.boss.send(queue, {});
+
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  const health = await client.captureHealth({ coverage: false });
+  expect(health.lastCapturedSeq).not.toBeNull();
+  expect(health.lastCapturedAt).toBeInstanceOf(Date);
+  expect(health.checked).toBeNull();  // skipped, not 0
+  expect(health.missing).toBeNull();
+});
+
+test('{ coverage: false } ignores sampleLimit (unused → not validated)', async () => {
+  const client = bossier({ boss: h.boss, pool: h.pool });
+  await expect(
+    client.captureHealth({ coverage: false, sampleLimit: 0 }),
+  ).resolves.toMatchObject({ checked: null, missing: null });
+});
