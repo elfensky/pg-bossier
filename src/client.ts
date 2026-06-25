@@ -18,6 +18,7 @@ import { subscribeEvents, type BossierEvents, type SubscribeOptions } from './ev
 import { getLiveState, getLiveHeartbeat, getLiveHeartbeats, type LiveState } from './live.js';
 import { captureHealth, type CaptureHealth } from './health.js';
 import { softReadDb, isBossierInstalled } from './installed.js';
+import { prune, type PruneOptions } from './prune.js';
 import { migrate } from './install.js';
 import { resolveSchemas, type SchemaNames } from './sql.js';
 import { pgBossDb, type BossierDb } from './db.js';
@@ -273,6 +274,18 @@ export interface BossierMethods {
    * stay fail-soft and writes fail-open regardless.
    */
   ensureInstalled: () => Promise<void>;
+  /**
+   * Retention **primitive** (#42): delete chronicle rows for **fully-done** jobs
+   * (current attempt terminal) bounded by `olderThan` and/or `keepLastPerQueue`,
+   * so the durability table doesn't grow without bound. In-flight jobs (current
+   * attempt non-terminal) are never touched; an eligible done job is deleted
+   * whole (all attempts). At least one bound is required (a no-arg call throws);
+   * with both, a job must violate both to be deleted. The retention *policy*
+   * (when to call this) stays consumer-owned — pg-bossier never prunes on its
+   * own. Returns the number of rows deleted. Not fail-open: an explicit
+   * maintenance call, so DB errors propagate.
+   */
+  prune: (opts?: PruneOptions) => Promise<{ deleted: number }>;
 }
 
 /**
@@ -304,6 +317,7 @@ export const BOSSIER_METHOD_NAMES = [
   'getLiveState', 'getLiveHeartbeat', 'getLiveHeartbeats',
   'captureHealth',
   'isBossierInstalled', 'ensureInstalled',
+  'prune',
 ] as const satisfies readonly (keyof BossierMethods)[];
 
 /** `subscribeEvents` needs a real pg connection an ORM adapter can't provide. */
@@ -407,6 +421,7 @@ export function bossier(options: BossierOptions): Bossier {
     getClaim: (jobId) => getClaim(readDb, s, jobId),
     isBossierInstalled: () => isBossierInstalled(db, s),
     ensureInstalled,
+    prune: (opts) => prune(db, s, opts),
     recordInputSnapshot: (jobId, attempt, snapshot) =>
       recordInputSnapshot(db, s, jobId, attempt, snapshot),
     // Overloaded: dispatch at the call site to land on each of the underlying

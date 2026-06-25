@@ -54,7 +54,7 @@ From issue #1. These are not up for casual revisiting inside an implementation P
 - **Not a testing harness.** pg-boss ships its own testability hooks.
 - **Not introspecting handler behavior.** Goal 4's input-snapshot slot is for _consumer-supplied_ data only.
 - **Don't become an ORM.** Should work alongside Prisma without depending on it.
-- **No bounded retention tooling.** pg-bossier writes to its audit table forever; retention is consumer-owned.
+- **No retention _policy_; a manual retention _primitive_ is allowed (amended 2026-06-25, [#42](https://github.com/elfensky/pg-bossier/issues/42)).** pg-bossier never prunes on its own — no scheduler, no default TTL, nothing runs automatically; *when* and *whether* to trim stays entirely consumer-owned, and by default the audit table grows forever. What it *does* provide (since v0.5.0) is a guarded `prune({ olderThan?, keepLastPerQueue? })` primitive so a consumer trims the durability layer without hand-writing `DELETE`s against the internal schema (which would defeat the "no raw SQL against the layer" contract). The primitive only ever deletes fully-done jobs (current attempt terminal) and never touches an in-flight job. The original "writes forever / no retention tooling at all" stance was narrowed once the descent-app trial put `record` on a load-bearing path (the [#26](https://github.com/elfensky/pg-bossier/issues/26) "concrete, measured need" gate) — "Don't add scheduling" and "retention is consumer-owned" both still hold.
 - **Symmetric drop-in.** Adding pg-bossier = one dependency + one migration. Removing it = `DROP SCHEMA pgbossier CASCADE` + uninstall the package.
 - **No upstream PR campaign.** We're not trying to land these features in pg-boss itself.
 
