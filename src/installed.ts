@@ -50,7 +50,7 @@ export function softReadDb(db: BossierDb): BossierDb {
             '(warns once)',
           );
         }
-        return { rows: [], rowCount: 0, command: '', oid: 0, fields: [] } as unknown as QueryResult<R>;
+        return { rows: [], rowCount: 0, command: '', oid: 0, fields: [] };
       }
     },
   };
