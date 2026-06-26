@@ -1,4 +1,4 @@
-import { test, expect, beforeEach, afterEach, vi } from 'vitest';
+import { test, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 import { install } from '../src/install.js';
 import { bossier } from '../src/client.js';
@@ -7,12 +7,16 @@ import { bossier } from '../src/client.js';
 // install). Reads must fail-soft (return empty, not throw a raw 42P01) so a
 // forgotten migrate degrades instead of 500ing the host's request path — and
 // isBossierInstalled() reports the state for an explicit startup gate.
+// #24: one shared container; reset to a clean NOT-installed slate between tests.
 
 const UUID = '00000000-0000-0000-0000-000000000000';
 
 let h: Harness;
-beforeEach(async () => { h = await startHarness(); }); // NOTE: no install()
-afterEach(async () => { await h.teardown(); });
+beforeAll(async () => { h = await startHarness(); }); // NOTE: no install()
+afterAll(async () => { await h.teardown(); });
+beforeEach(async () => {
+  await h.pool.query('DROP SCHEMA IF EXISTS pgbossier CASCADE; DELETE FROM pgboss.job;');
+});
 
 test('isBossierInstalled() is false before install, true after', async () => {
   const client = bossier({ boss: h.boss, pool: h.pool });

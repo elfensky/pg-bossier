@@ -15,7 +15,10 @@ export interface Harness {
 }
 
 export async function startHarness(): Promise<Harness> {
-  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:18').start();
+  // postgres:18-alpine — ~80MB vs ~140MB, a faster pull + slightly faster boot
+  // than the standard image (#24). pg-boss is well-tested on alpine; the suite
+  // is green on it.
+  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:18-alpine').start();
   const connectionString = container.getConnectionUri();
   // supervise/schedule off: otherwise pg-boss's maintenance and cron loops insert
   // jobs mid-test, the capture trigger mirrors them, and count(*) assertions flake.

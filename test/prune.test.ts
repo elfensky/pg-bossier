@@ -1,4 +1,4 @@
-import { test, expect, beforeEach, afterEach } from 'vitest';
+import { test, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { startHarness, type Harness } from './harness.js';
 import { install } from '../src/install.js';
@@ -7,14 +7,17 @@ import { resolveSchemas } from '../src/sql.js';
 
 // #42: prune is a guarded retention primitive. We insert chronicle rows directly
 // to control state / attempt / timestamps deterministically.
+// #24: one shared container; prune operates on the whole table, so each test
+// starts from a truncated chronicle (the direct inserts use random job ids).
 
 const S = resolveSchemas();
 const OLD = new Date('2020-01-01T00:00:00Z');
 const CUTOFF = new Date('2021-01-01T00:00:00Z');
 
 let h: Harness;
-beforeEach(async () => { h = await startHarness(); await install(h.pool); });
-afterEach(async () => { await h.teardown(); });
+beforeAll(async () => { h = await startHarness(); await install(h.pool); });
+afterAll(async () => { await h.teardown(); });
+beforeEach(async () => { await h.pool.query('TRUNCATE pgbossier.record'); });
 
 async function rec(
   jobId: string, queue: string, attempt: number, state: string,

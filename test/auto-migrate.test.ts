@@ -1,17 +1,22 @@
-import { test, expect, beforeEach, afterEach } from 'vitest';
+import { test, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 import { bossier } from '../src/client.js';
 
 // #39: opt-in startup provisioning. startHarness does NOT install pg-bossier, so
 // these exercise the provision-at-startup path against a fresh schema.
+// #24: one shared container; reset to a clean NOT-installed slate between tests
+// (each test provisions via autoMigrate/ensureInstalled as needed).
 
 const EMPTY_COUNTS = {
   created: 0, active: 0, retry: 0, completed: 0, cancelled: 0, failed: 0,
 };
 
 let h: Harness;
-beforeEach(async () => { h = await startHarness(); }); // NOTE: no install()
-afterEach(async () => { await h.teardown(); });
+beforeAll(async () => { h = await startHarness(); }); // NOTE: no install()
+afterAll(async () => { await h.teardown(); });
+beforeEach(async () => {
+  await h.pool.query('DROP SCHEMA IF EXISTS pgbossier CASCADE; DELETE FROM pgboss.job;');
+});
 
 test('autoMigrate: true provisions the schema at startup', async () => {
   const client = bossier({ boss: h.boss, pool: h.pool, autoMigrate: true });

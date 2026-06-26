@@ -1,4 +1,4 @@
-import { test, expect, beforeEach, afterEach } from 'vitest';
+import { test, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
 import { install } from '../src/install.js';
 import { bossier } from '../src/client.js';
@@ -6,10 +6,15 @@ import { bossier } from '../src/client.js';
 // #27: countByState/countByQueue count the chronicle by default, which RETAINS
 // jobs pg-boss has deleted — an all-time superset of live queue depth. The
 // { live: true } option counts the live pgboss.job table instead.
+// #24: one shared container; clear live jobs + chronicle between tests (DELETE
+// doesn't fire the capture trigger; pg-bossier stays installed).
 
 let h: Harness;
-beforeEach(async () => { h = await startHarness(); await install(h.pool); });
-afterEach(async () => { await h.teardown(); });
+beforeAll(async () => { h = await startHarness(); await install(h.pool); });
+afterAll(async () => { await h.teardown(); });
+beforeEach(async () => {
+  await h.pool.query('DELETE FROM pgboss.job; TRUNCATE pgbossier.record;');
+});
 
 test('{ live: true } excludes a GC-deleted job the chronicle still retains', async () => {
   const queue = 'count-gc';
