@@ -55,39 +55,42 @@ As later goals land they will add surfaces — `work` and the ORM
 transaction adapters to Stable, more `pgboss.job` columns to
 Transitional. Extend the tables above in the same change.
 
-## Version support — no matrix today, self-firing tripwire
+## Version support — floor+latest matrix + cross-version assertions
 
-pg-bossier's CI runs against a single pg-boss version: whatever `npm ci`
-resolves to inside the peer-dep range declared in `package.json`. Today
-the floor and the latest published pg-boss are the same version, so a
-matrix would be a degenerate one-entry list.
+Per-push CI (`ci.yml`) runs the suite against a single pg-boss version:
+whatever `npm ci` resolves to inside the peer-dep range. A self-firing
+tripwire job compares the latest published pg-boss minor against the
+peer-dep floor and warns (does not fail) when they diverge.
 
-What CI-against-latest catches: hard schema breaks — a column we read
-disappears, or changes type in a way the trigger cannot compile against
-— detectable by the existing integration suite. What it does NOT catch:
-silent semantic drift. A column kept as an alias on rename. A
-type/nullability shift the trigger still compiles against. pg-boss
-adding or reordering its own triggers on `pgboss.job`. Upgrade-path
-bugs that only manifest moving from an older minor to a newer one.
-Those classes of bug are caught by cross-version correctness assertions
-against `pgbossier.record`, not by matrix presence alone (see [follow-up
-issue #19](https://github.com/elfensky/pg-bossier/issues/19)).
+What CI-against-one-version catches: hard schema breaks — a column we
+read disappears, or changes type in a way the trigger cannot compile
+against. What it does NOT catch: silent semantic drift. A column kept
+as an alias on rename. A type/nullability shift the trigger still
+compiles against. pg-boss adding or reordering its own triggers on
+`pgboss.job`. Upgrade-path bugs that only manifest moving from an older
+minor to a newer one.
 
-The tripwire: a CI step compares the latest published pg-boss version
-against the peer-dep floor declared in `package.json`. When they
-diverge, the step surfaces a warning that links back to this section.
-The trigger to add a floor+latest version matrix is **floor and latest
-diverging**, contingent on the correctness assertions above existing
-first. The matrix is the runtime; the assertions are the safety. A
-matrix without assertions broadens the set of versions we can silently
-be wrong on.
+Those classes are caught by **cross-version correctness assertions**
+(`test/cross-version.test.ts`, issue #19): they drive a known success +
+retry lifecycle through pg-boss's public API and assert that *every*
+`pgboss.job` column the capture trigger reads lands correctly in
+`pgbossier.record`. When the tripwire fired (floor `12.18.2`, latest
+`12.23.0` diverged), those assertions plus a **floor+latest matrix**
+landed: `.github/workflows/compat-matrix.yml` runs the full suite —
+drift detectors included — against both the peer-dep floor and the
+latest published 12.x. Both specs are derived from the declared
+peer-dep range, so they never drift from it. Cadence: weekly + on
+demand (the per-push tripwire is the signal to run it); not on every
+push, to keep ordinary CI fast. The matrix is the runtime; the
+assertions are the safety — a matrix without assertions would only
+broaden the set of versions we can silently be wrong on.
 
 No time-bound support SLA. The "~2 weeks" estimate in issue #1 was an
 internal complexity gate, not a commitment to consumers. "Supported"
-means "the existing CI passes against the version pg-boss publishes
-into the peer-dep range." When the floor and latest diverge,
-"supported" extends to include the correctness assertions naming what
-semantic behavior is verified across versions.
+means "CI — per-push and the floor+latest matrix — passes against the
+version pg-boss publishes into the peer-dep range, with the
+cross-version assertions verifying the chronicle stays correct across
+that range."
 
 ## Unsupported topologies (Goal 7)
 

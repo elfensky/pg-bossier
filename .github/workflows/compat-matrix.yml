@@ -1,0 +1,43 @@
+# pg-boss compatibility matrix (#19). Runs the integration suite — including the
+# cross-version drift detectors in test/cross-version.test.ts — against BOTH the
+# peer-dep floor and the latest published pg-boss 12.x, to catch chronicle drift
+# that CI-against-one-version cannot (column rename/alias, type/nullability shift,
+# pg-boss trigger reorder, upgrade-path-only bugs). See COMPATIBILITY.md
+# "Version support" and issue #19.
+#
+# Cadence: weekly + on demand, NOT on every push — the per-push tripwire in
+# ci.yml warns when latest drifts above the floor; this job is what that warning
+# tells you to run. Both specs are derived from package.json's peer-dep floor so
+# they never drift from the declared range.
+name: compat-matrix
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+
+jobs:
+  compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false # report both versions even if one fails
+      matrix:
+        which: [floor, latest]
+    name: pg-boss ${{ matrix.which }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Install pg-boss (${{ matrix.which }})
+        run: |
+          set -euo pipefail
+          FLOOR=$(node -e "console.log(require('./package.json').peerDependencies['pg-boss'].replace(/^\D*/,''))")
+          if [ "${{ matrix.which }}" = "floor" ]; then SPEC="$FLOOR"; else SPEC="^$FLOOR"; fi
+          echo "Installing pg-boss@$SPEC (floor=$FLOOR)"
+          npm install --no-save pg-boss@"$SPEC"
+          node -e "console.log('Resolved pg-boss:', require('pg-boss/package.json').version)"
+      - run: npm test
