@@ -327,6 +327,31 @@ const stalled = await client.listLongRunning({ longerThanSeconds: 600 });
 > const liveNow = await client.countByState({ queue: 'email', live: true }); // live pgboss.job depth
 > ```
 
+### Typing your jobs
+
+pg-bossier's reads are **generic on your payload shapes**. Pass the types at the call site; your editor then autocompletes `data` / `output` and catches typos before runtime:
+
+```ts
+interface OrderInput { sku: string; qty: number }
+interface OrderResult { shipped: boolean }
+
+const job = await client.findById<OrderInput, OrderResult>(jobId);
+job?.data?.sku;       // string | undefined   (typed)
+job?.output?.shipped; // boolean | undefined  (typed; narrows on state)
+
+const { rows } = await client.listJobs<OrderInput, OrderResult>({ queue: 'orders' });
+```
+
+Without a type parameter the payload is **`unknown`** — deliberately, so you narrow it before use instead of getting an unsound `any`. `getProgress<T>` and `getInputSnapshot<T>` are generic the same way, and `terminalDetail` is a typed discriminated union (`TerminalDetailFailed` mandates a failure `class`, etc.) you read off `state`.
+
+Repeating the generics gets old — alias a queue's read once:
+
+```ts
+const findOrder = (id: string) => client.findById<OrderInput, OrderResult>(id);
+```
+
+That's the whole pattern: **call-site generics, `unknown` by default.** pg-bossier deliberately does *not* ship a queue→type registry or a module-augmentation layer — those edge toward an ORM (a non-goal), and a one-line alias covers the ergonomics. Plain-JS consumers call the same methods with no type parameters and no compile step; the shipped `.d.ts` makes both paths work.
+
 ### Capture health
 
 Capture is fail-open: a failing trigger logs a Postgres `WARNING` and leaves a gap in `pgbossier.record`, with no app-level signal. `captureHealth()` makes that drift observable — chronicle freshness plus a bounded coverage check:

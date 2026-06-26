@@ -137,9 +137,9 @@ Each decision below is its own GitHub issue. Sub-issues opened during the issue 
 
 | Sub-issue                                                    | Reason                                        |
 | ------------------------------------------------------------ | --------------------------------------------- |
-| Backfill strategy for existing installs                      | Affects Goal 1 implementation                 |
+| ✅ Backfill strategy for existing installs _(done — #11 closed: batched keyset backfill, `{ backfilled }` count, `backfillChunkSize` option; decided no `backfilled` marker column)_ | Affects Goal 1 implementation                 |
 | ✅ Performance budget — first measurement + per-method published budgets _(done — #12 closed via PR #22; scale extensions / CI integration / violation policy follow-up #21 open)_ | Gives Goal 8's "stay close" enforceable teeth |
-| TypeScript generics surface — `Job<TInput, TOutput>` pattern | Most affects Goal 5; also Goal 6/7            |
+| ✅ TypeScript generics surface — `Job<TInput, TOutput>` pattern _(decided — #13 closed: ratified inline call-site generics + `unknown` default; no registry/module-augmentation layer (ORM-adjacent); documented in README § Typing your jobs)_ | Most affects Goal 5; also Goal 6/7            |
 
 If a task touches one of these and there's no companion issue, open one (or ask the user to) before writing code.
 
