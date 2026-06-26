@@ -3,7 +3,7 @@ import {
   resolveSchemas, type SchemaNames,
   schemaSql, sequenceSql, recordTableSql, alterRecordColumnsSql,
   recordIndexesSql, dropObsoleteIndexesSql,
-  captureFunctionSql, captureTriggerSql, backfillSql,
+  captureFunctionSql, captureTriggerSql, backfillChunkSql,
 } from './sql.js';
 
 export interface InstallOptions {
@@ -11,6 +11,38 @@ export interface InstallOptions {
   schema?: string;
   /** Where pg-boss installed itself. Default: 'pgboss'. */
   pgbossSchema?: string;
+  /**
+   * Rows per backfill batch (#11). The install-time backfill copies
+   * `pgboss.job` into `pgbossier.record` in keyset-paginated batches of this
+   * size — one code path for every install size. Default 10_000; lower it to
+   * bound per-statement work / memory when backfilling a very large
+   * `pgboss.job` on a constrained box. Must be a positive integer.
+   */
+  backfillChunkSize?: number;
+}
+
+/** Result of {@link install} / {@link migrate}. */
+export interface InstallResult {
+  /**
+   * How many rows the install-time backfill copied from `pgboss.job` into
+   * `pgbossier.record` (#11). `0` on a fresh DB with no pre-existing jobs, or on
+   * a re-run where every row already exists (`ON CONFLICT DO NOTHING`).
+   */
+  backfilled: number;
+}
+
+const DEFAULT_BACKFILL_CHUNK = 10_000;
+/** Min uuid — the keyset cursor's starting point (`id > $1`). */
+const MIN_UUID = '00000000-0000-0000-0000-000000000000';
+
+function resolveBackfillChunk(size: number | undefined): number {
+  if (size === undefined) return DEFAULT_BACKFILL_CHUNK;
+  if (!Number.isInteger(size) || size <= 0) {
+    throw new Error(
+      `pgbossier: backfillChunkSize must be a positive integer, got ${String(size)}`,
+    );
+  }
+  return size;
 }
 
 /**
@@ -23,7 +55,9 @@ export interface InstallOptions {
  * current pg-bossier doesn't. No `DROP TABLE`, no `DROP SCHEMA`, no `DELETE` —
  * existing `record` rows always survive (issue #28).
  */
-async function applySchema(client: PoolClient, s: SchemaNames): Promise<void> {
+async function applySchema(
+  client: PoolClient, s: SchemaNames, chunkSize: number,
+): Promise<number> {
   // Preflight: confirm the pg-boss source table exists. Fails fast with a
   // clear error before any DDL runs.
   await client.query(`SELECT 1 FROM ${s.pgboss}.job LIMIT 0`);
@@ -63,13 +97,31 @@ async function applySchema(client: PoolClient, s: SchemaNames): Promise<void> {
   // Running the backfill inside that transaction would hold the lock for the
   // whole INSERT...SELECT, blocking every pg-boss queue write (and read) for as
   // long as the backfill runs — freezing a live queue on a large pgboss.job.
-  // Committing first releases the lock and makes the trigger live; this
-  // INSERT...SELECT then takes only ACCESS SHARE on pgboss.job and never blocks
+  // Committing first releases the lock and makes the trigger live; the backfill
+  // batches below then take only ACCESS SHARE on pgboss.job and never block
   // pg-boss. ON CONFLICT DO NOTHING means a row the now-live trigger already
   // captured in the gap is not clobbered (and never overwrites an existing
   // chronicle row), and re-running safely completes a backfill that errored
   // here (idempotent).
-  await client.query(backfillSql(s));
+  //
+  // Batched (#11): keyset-paginate pgboss.job by id, copying `chunkSize` rows
+  // per statement until a batch returns fewer than `chunkSize` (the last one).
+  // One code path for every size — a small install is a single batch, millions
+  // are N small batches (bounded per-statement work/WAL, resumable). Each batch
+  // is its own implicit transaction (we're outside BEGIN/COMMIT now).
+  let lastId = MIN_UUID;
+  let backfilled = 0;
+  for (;;) {
+    const { rows } = await client.query<{ last_id: string | null; scanned: number; inserted: number }>(
+      backfillChunkSql(s), [lastId, chunkSize],
+    );
+    const batch = rows[0];
+    if (!batch || batch.scanned === 0) break;
+    backfilled += batch.inserted;
+    if (batch.last_id === null || batch.scanned < chunkSize) break; // last batch
+    lastId = batch.last_id;
+  }
+  return backfilled;
 }
 
 /**
@@ -81,17 +133,22 @@ async function applySchema(client: PoolClient, s: SchemaNames): Promise<void> {
  * install from a prior pg-bossier version: it adds any missing columns/indexes
  * in place and preserves every existing `record` row (see {@link migrate},
  * which is the same operation under an upgrade-intent name).
+ *
+ * Returns `{ backfilled }` — how many pre-existing `pgboss.job` rows the backfill
+ * copied into the chronicle (#11).
  */
 export async function install(
   pool: Pool, options?: InstallOptions,
-): Promise<void> {
+): Promise<InstallResult> {
   const s = resolveSchemas({
     pgbossier: options?.schema,
     pgboss:    options?.pgbossSchema,
   });
+  const chunkSize = resolveBackfillChunk(options?.backfillChunkSize);
   const client = await pool.connect();
   try {
-    await applySchema(client, s);
+    const backfilled = await applySchema(client, s, chunkSize);
+    return { backfilled };
   } finally {
     client.release();
   }
@@ -112,7 +169,7 @@ export async function install(
  */
 export async function migrate(
   pool: Pool, options?: InstallOptions,
-): Promise<void> {
+): Promise<InstallResult> {
   return install(pool, options);
 }
 

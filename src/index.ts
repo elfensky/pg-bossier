@@ -7,7 +7,7 @@
 export * from 'pg-boss';
 
 export { install, migrate, uninstall } from './install.js';
-export type { InstallOptions } from './install.js';
+export type { InstallOptions, InstallResult } from './install.js';
 export { bossier } from './client.js';
 export type { Bossier, BossierMethods, BossierOptions } from './client.js';
 export type {

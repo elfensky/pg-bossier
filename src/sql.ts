@@ -239,15 +239,42 @@ CREATE TRIGGER ${trigName}
   FOR EACH ROW EXECUTE FUNCTION ${s.pgbossier}.capture();`;
 }
 
-export function backfillSql(s: SchemaNames): string {
+/**
+ * One backfill batch (#11): copy up to `$2` `pgboss.job` rows with `id > $1`
+ * into `pgbossier.record`, keyset-paginated by the `id` primary key (an index
+ * range scan — no OFFSET cost). Returns `last_id` (the cursor for the next
+ * batch), `scanned` (rows in this batch — `< $2` means the last batch), and
+ * `inserted` (rows actually copied; `ON CONFLICT DO NOTHING` skips rows the
+ * now-live trigger already captured in the install gap). The install loop runs
+ * this until a batch returns `scanned < $2`. One code path for every size: a
+ * small install is a single batch, millions are N small batches (bounded
+ * per-statement work / WAL, and resumable — re-running an interrupted backfill
+ * is idempotent).
+ */
+export function backfillChunkSql(s: SchemaNames): string {
   return `
-INSERT INTO ${s.pgbossier}.record
-  (job_id, queue, attempt, state, data, output,
-   priority, retry_limit, singleton_key,
-   created_on, started_on, completed_on, captured_at)
-SELECT id, name, retry_count, state, data, output,
-       priority, retry_limit, singleton_key,
-       created_on, started_on, completed_on, now()
-FROM ${s.pgboss}.job
-ON CONFLICT (job_id, attempt) DO NOTHING;`;
+WITH batch AS (
+  SELECT id, name, retry_count, state, data, output,
+         priority, retry_limit, singleton_key,
+         created_on, started_on, completed_on
+  FROM ${s.pgboss}.job
+  WHERE id > $1::uuid
+  ORDER BY id
+  LIMIT $2
+),
+ins AS (
+  INSERT INTO ${s.pgbossier}.record
+    (job_id, queue, attempt, state, data, output,
+     priority, retry_limit, singleton_key,
+     created_on, started_on, completed_on, captured_at)
+  SELECT id, name, retry_count, state, data, output,
+         priority, retry_limit, singleton_key,
+         created_on, started_on, completed_on, now()
+  FROM batch
+  ON CONFLICT (job_id, attempt) DO NOTHING
+  RETURNING 1
+)
+SELECT (SELECT id FROM batch ORDER BY id DESC LIMIT 1) AS last_id,
+       (SELECT count(*) FROM batch)::int               AS scanned,
+       (SELECT count(*) FROM ins)::int                 AS inserted;`;
 }

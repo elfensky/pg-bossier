@@ -367,10 +367,11 @@ export function bossier(options: BossierOptions): Bossier {
     if (pool === undefined) return Promise.reject(new Error(AUTO_MIGRATE_NEEDS_POOL));
     ensurePromise ??= migrate(pool, {
       schema: options.schema, pgbossSchema: options.pgbossSchema,
-    }).catch((err: unknown) => {
-      ensurePromise = undefined; // failed → allow a retry on the next call
-      throw err;
-    });
+    }).then(() => undefined) // discard migrate()'s { backfilled } — ensureInstalled is void
+      .catch((err: unknown) => {
+        ensurePromise = undefined; // failed → allow a retry on the next call
+        throw err;
+      });
     return ensurePromise;
   };
   if (options.autoMigrate === true) {

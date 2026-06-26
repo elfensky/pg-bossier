@@ -111,7 +111,8 @@ import { Pool } from 'pg';
 import { install } from 'pg-bossier';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-await install(pool);  // creates the pgbossier schema, table, trigger, etc.
+const { backfilled } = await install(pool); // schema, table, trigger, + backfill
+console.log(`captured ${backfilled} pre-existing jobs`);
 
 // Later:
 import { uninstall } from 'pg-bossier';
@@ -119,7 +120,21 @@ await uninstall(pool);  // DROP SCHEMA pgbossier CASCADE
 ```
 
 `install()` is idempotent. Run it once at app boot or in a one-shot
-migration script.
+migration script. It also **backfills** any jobs already in `pgboss.job` at
+install time (so you capture history that predates pg-bossier, not only new
+jobs), and returns `{ backfilled }` — how many rows it copied.
+
+The backfill is **batched** — it keyset-paginates `pgboss.job` in chunks of
+`backfillChunkSize` (default 10,000), so it copies a table with millions of
+historical jobs without one giant statement, and is resumable (re-running an
+interrupted install finishes it, idempotently). The copy is a read-only
+`SELECT` that runs *after* the schema DDL commits, so it never blocks live
+pg-boss traffic — but it's still a one-time scan of `pgboss.job`, so on a very
+large table run `install()` during a quiet window (and lower `backfillChunkSize`
+to bound per-statement work on a memory-constrained box). Backfilled rows are
+captured at their live state as of install time and are indistinguishable from
+trigger-captured rows except by `captured_at` ≈ install time — by design (no
+separate `backfilled` marker).
 
 ### Auto-provision at startup
 

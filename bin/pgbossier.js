@@ -99,11 +99,11 @@ try {
   });
 
   if (cmd === 'install') {
-    await install(pool, {
+    const { backfilled } = await install(pool, {
       schema:       values['schema'],
       pgbossSchema: values['pgboss-schema'],
     });
-    console.log('pgbossier: installed');
+    console.log(`pgbossier: installed (backfilled ${backfilled} existing job${backfilled === 1 ? '' : 's'})`);
   } else {
     await uninstall(pool, { schema: values['schema'] });
     console.log('pgbossier: uninstalled');
