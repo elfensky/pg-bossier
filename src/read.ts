@@ -21,6 +21,8 @@ interface RecordShared<TInput> {
   priority: number | null;
   retryLimit: number | null;
   singletonKey: string | null;
+  /** App-written claim owner of this attempt (see `setClaim`/`getClaim`); `null` if unclaimed. */
+  claimedBy: string | null;
   createdOn: Date | null;
   startedOn: Date | null;
   completedOn: Date | null;
@@ -61,7 +63,7 @@ export interface ListJobsOpts extends JobFilter {
   offset?: number;
 }
 
-interface RawRecordRow {
+export interface RawRecordRow {
   job_id: string;
   queue: string;
   attempt: number;
@@ -74,6 +76,7 @@ interface RawRecordRow {
   priority: number | null;
   retry_limit: number | null;
   singleton_key: string | null;
+  claimed_by: string | null;
   created_on: Date | null;
   started_on: Date | null;
   completed_on: Date | null;
@@ -84,9 +87,10 @@ interface RawRecordRow {
 /**
  * Map a raw snake_case DB row to a camelCase `JobRecord`. The single `as` cast
  * is the controlled DB boundary: the state-to-output correlation is a runtime
- * invariant TypeScript cannot verify.
+ * invariant TypeScript cannot verify. Exported for reuse by the archive
+ * export/import path (`src/archive.ts`).
  */
-function mapRecord<TInput = unknown, TOutput = unknown>(
+export function mapRecord<TInput = unknown, TOutput = unknown>(
   r: RawRecordRow,
 ): JobRecord<TInput, TOutput> {
   return {
@@ -102,6 +106,7 @@ function mapRecord<TInput = unknown, TOutput = unknown>(
     priority: r.priority,
     retryLimit: r.retry_limit,
     singletonKey: r.singleton_key,
+    claimedBy: r.claimed_by,
     createdOn: r.created_on,
     startedOn: r.started_on,
     completedOn: r.completed_on,

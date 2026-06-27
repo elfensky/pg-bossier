@@ -697,6 +697,27 @@ const { deleted } = await client.prune({ keepLastPerQueue: 500 });
 
 It only ever deletes **fully-done** jobs (current attempt `completed`/`failed`/`cancelled`) and deletes them whole (all attempts); an **in-flight job is never touched**. At least one bound is required (a no-arg call throws rather than wipe everything); with both, a job must violate both to be deleted. Returns `{ deleted }` (rows removed). Not fail-open — it's an explicit maintenance call, so errors propagate; best run during a quiet window (see the `prune` JSDoc).
 
+#### Tiered retention — archive before you prune
+
+To keep history without growing the hot table forever, **export** old rows to cold storage, prune them, and **import** them back to reconstruct history for an audit/incident. pg-bossier hands you the rows *as data* and takes them back — it owns no storage destination or format (file / S3 / another DB is yours to pick):
+
+```ts
+// 1. export everything completed before the cutoff (streamed in batches)
+const cutoff = new Date(Date.now() - 365 * 864e5);
+for await (const batch of client.exportRecords({ completedBefore: cutoff })) {
+  // seq is a bigint — convert it before JSON.stringify
+  await writeToColdStorage(batch.map((r) => ({ ...r, seq: String(r.seq) })));
+}
+// 2. reclaim the space
+await client.prune({ olderThan: cutoff });
+
+// later — reconstruct history for an audit:
+const archived = await readFromColdStorage();        // JobRecord[] (seq as string is fine)
+const { imported } = await client.importRecords(archived);
+```
+
+`exportRecords` is an async generator (keyset-paginated by `seq`, stable across a long export) and reads only. `importRecords` is idempotent and **never clobbers** (`ON CONFLICT (job_id, attempt) DO NOTHING`) — re-importing is safe, and re-imported rows keep their original (low) `seq`, below any live `getEventsSince` cursor, so they don't replay to live event consumers. The round-trip is lossless (all columns, including `claimedBy`); the only serialization wrinkle is `seq` (a `bigint`) — stringify it, and `importRecords` accepts it back as a string.
+
 ### Uninstall
 
 Removal is symmetric — one statement drops everything pg-bossier created and leaves `pgboss.job` untouched:

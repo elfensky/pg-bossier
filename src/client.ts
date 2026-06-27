@@ -19,6 +19,10 @@ import { getLiveState, getLiveHeartbeat, getLiveHeartbeats, type LiveState } fro
 import { captureHealth, type CaptureHealth } from './health.js';
 import { softReadDb, isBossierInstalled } from './installed.js';
 import { prune, type PruneOptions } from './prune.js';
+import {
+  exportRecords, importRecords,
+  type ExportFilter, type ExportOptions, type ImportResult,
+} from './archive.js';
 import { migrate } from './install.js';
 import { resolveSchemas, type SchemaNames } from './sql.js';
 import { pgBossDb, type BossierDb } from './db.js';
@@ -286,6 +290,24 @@ export interface BossierMethods {
    * maintenance call, so DB errors propagate.
    */
   prune: (opts?: PruneOptions) => Promise<{ deleted: number }>;
+  /**
+   * Export chronicle rows for archiving (#46) — the export half of tiered
+   * retention (pairs with {@link prune}). An async generator yielding `JobRecord`
+   * batches, keyset-paginated by `seq`; the consumer serializes each batch to
+   * cold storage (pg-bossier owns no destination/format). `seq` is a `bigint` —
+   * convert it (`String(r.seq)`) before `JSON.stringify`. Read-only.
+   */
+  exportRecords: <TInput = unknown, TOutput = unknown>(
+    filter?: ExportFilter, opts?: ExportOptions,
+  ) => AsyncGenerator<JobRecord<TInput, TOutput>[]>;
+  /**
+   * Re-insert previously-exported chronicle rows (#46) — the import half, for
+   * reconstructing history during an audit. Idempotent + non-clobbering
+   * (`ON CONFLICT DO NOTHING`), preserves each row's original `seq`. Accepts the
+   * `JobRecord` shape `exportRecords` yields (`seq` as bigint/string/number).
+   * Not fail-open (explicit maintenance call). Returns the count inserted.
+   */
+  importRecords: (records: readonly JobRecord[]) => Promise<ImportResult>;
 }
 
 /**
@@ -317,7 +339,7 @@ export const BOSSIER_METHOD_NAMES = [
   'getLiveState', 'getLiveHeartbeat', 'getLiveHeartbeats',
   'captureHealth',
   'isBossierInstalled', 'ensureInstalled',
-  'prune',
+  'prune', 'exportRecords', 'importRecords',
 ] as const satisfies readonly (keyof BossierMethods)[];
 
 /** `subscribeEvents` needs a real pg connection an ORM adapter can't provide. */
@@ -425,6 +447,12 @@ export function bossier(options: BossierOptions): Bossier {
     isBossierInstalled: () => isBossierInstalled(db, s),
     ensureInstalled,
     prune: (opts) => prune(db, s, opts),
+    // exportRecords is a read (fail-soft readDb, async generator — returned, not awaited);
+    // importRecords is a write (raw db, errors propagate).
+    exportRecords: <TInput = unknown, TOutput = unknown>(
+      filter?: ExportFilter, opts?: ExportOptions,
+    ) => exportRecords<TInput, TOutput>(readDb, s, filter, opts),
+    importRecords: (records) => importRecords(db, s, records),
     recordInputSnapshot: (jobId, attempt, snapshot) =>
       recordInputSnapshot(db, s, jobId, attempt, snapshot),
     // Overloaded: dispatch at the call site to land on each of the underlying
