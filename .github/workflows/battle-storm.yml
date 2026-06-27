@@ -21,9 +21,10 @@ on:
 jobs:
   storm:
     runs-on: ubuntu-latest
-    # Generous backstop for the 1M run (the test scales its own internal budgets
-    # with N). Bump if you storm past 1M.
-    timeout-minutes: 75
+    # Backstop for the 1M run, which is CI-measured at ~45 min (superlinear at
+    # scale — the test scales its own internal budgets with N). Bump past 90 if
+    # you storm beyond 1M.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

@@ -39,12 +39,14 @@ const QUEUES: battle.QueueDef[] = [
   { name: 'storm-4', pattern: 'pull' },
 ];
 
-// Scale the time budgets with N. Calibrated from a local 10k run (~5s test
-// time, ~2k jobs/s end-to-end): 1M extrapolates to ~10-20 min. These are
-// generous ceilings that stay under battle-storm.yml's 75-min workflow cap
-// (1M → drain 50 min, test 66 min).
-const DRAIN_MS = Math.max(120_000, N * 3);
-const TEST_MS = Math.max(300_000, N * 4);
+// Scale the time budgets with N. CI-MEASURED: 1M ran ~45 min end-to-end — the
+// lifecycle is superlinear at 1M (drain dominates: fetch contention + the
+// oracle's sort over 1M+ rows), NOT the ~10-20 min a 10k→100k linear
+// extrapolation suggested (10k ~6s, 100k ~58s locally). Budgets give real
+// headroom under battle-storm.yml's 90-min workflow cap (1M → drain 66 min,
+// test 83 min).
+const DRAIN_MS = Math.max(120_000, N * 4);
+const TEST_MS = Math.max(300_000, N * 5);
 
 let h: Harness | undefined;
 let client: Bossier | undefined;
