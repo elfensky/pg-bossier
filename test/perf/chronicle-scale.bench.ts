@@ -27,7 +27,7 @@ import { bossier, type Bossier } from '../../src/client.js';
  * Spec: docs/superpowers/specs/2026-05-23-performance-budget-design.md
  */
 
-const QUEUE = 'perf-queue';
+const QUEUE = 'perf-q-0'; // one of the populated queues (see global-setup.ts)
 const SAMPLES_PER_METHOD = 100;
 
 // Pin tinybench to exactly N=100 iterations. tinybench stops when BOTH the
@@ -50,17 +50,20 @@ const boss = new PgBoss({ connectionString, supervise: false, schedule: false })
 await boss.start();
 const client: Bossier = bossier({ boss, pool });
 
-describe('Perf — chronicle read methods (1k jobs)', () => {
+describe('Perf — chronicle read methods (all-states populate)', () => {
   // Each bench's `name` is the human-readable variant_label.
   // The stable canonical `method_id` is paired by name in
   // `scripts/perf-write.mjs::METHOD_IDS`; keep that map in sync with this list.
+  // knownJobId is a RETRIED job, so getRetryHistory(known) sees a real chain;
+  // QUEUE is one of the populated queues; the populate leaves active jobs so
+  // listLongRunning returns non-empty. Scale via PERF_N (see global-setup.ts).
   bench('findById(known)',                () => client.findById(knownJobId),                            PIN_100);
   bench('findById(unknown)',              () => client.findById(randomUUID()),                          PIN_100);
   bench('getRetryHistory(known)',         () => client.getRetryHistory(knownJobId),                     PIN_100);
   bench('listJobs({})',                   () => client.listJobs({}),                                    PIN_100);
   bench("listJobs({state:'completed'})",  () => client.listJobs({ state: 'completed' }),                PIN_100);
-  bench("listJobs({queue:'perf-queue'})", () => client.listJobs({ queue: QUEUE }),                      PIN_100);
-  bench("latestPerQueue(['perf-queue'])", () => client.latestPerQueue([QUEUE]),                         PIN_100);
+  bench("listJobs({queue:'perf-q-0'})",   () => client.listJobs({ queue: QUEUE }),                      PIN_100);
+  bench("latestPerQueue(['perf-q-0'])",   () => client.latestPerQueue([QUEUE]),                         PIN_100);
   bench('countByState({})',               () => client.countByState({}),                                PIN_100);
   bench('countByQueue({})',               () => client.countByQueue({}),                                PIN_100);
   bench('listLongRunning({900})',         () => client.listLongRunning({ longerThanSeconds: 900 }),     PIN_100);

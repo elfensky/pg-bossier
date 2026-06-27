@@ -1,0 +1,33 @@
+# On-demand scale perf run (#21). The every-push bench (perf-history.yml) runs at
+# the default PERF_N=1000 for fast, comparable trend data. Large-N runs (10k /
+# 100k / 1M) are too slow/expensive for every push, so they're opt-in here:
+# trigger manually with the job count, and the result table is uploaded as an
+# artifact. Same all-states populate as the default bench, just bigger.
+name: perf-scale
+
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: 'PERF_N — number of jobs to populate (e.g. 10000, 100000, 1000000)'
+        required: true
+        default: '100000'
+
+jobs:
+  scale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Run perf bench at PERF_N=${{ inputs.n }}
+        run: PERF_N='${{ inputs.n }}' npm run test:perf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perf-output-n${{ inputs.n }}
+          path: perf-output.json
+          if-no-files-found: error

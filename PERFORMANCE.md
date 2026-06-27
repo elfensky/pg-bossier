@@ -4,7 +4,7 @@ This is the **single authoritative document** for pg-bossier's performance measu
 
 The system has two halves:
 
-1. **The bench** — `test/perf/chronicle-scale.bench.ts`. Vitest `bench()` blocks pinned to a deterministic N=100 samples per method against a real Postgres instance with 1,000 pre-populated jobs. Produces `perf-output.json`.
+1. **The bench** — `test/perf/chronicle-scale.bench.ts`. Vitest `bench()` blocks pinned to a deterministic N=100 samples per method against a real Postgres instance with a synthetic **all-states** populate (`PERF_N` jobs, default 1,000 — see §1). Produces `perf-output.json`.
 2. **The chronicle** — the orphan `metrics` branch holds `perf-metrics.jsonl`, one record per `develop` push, appended by CI. Every PR is diffed against the latest record and the result is posted to `$GITHUB_STEP_SUMMARY` with a non-required `perf-regression` status check.
 
 Design rationale: see `docs/superpowers/specs/2026-05-23-performance-budget-design.md` (the original methodology) and the issue [#23 thread](https://github.com/elfensky/pg-bossier/issues/23) (CI-anchored history).
@@ -19,14 +19,23 @@ npm run test:perf
 
 This invokes `vitest bench --config vitest.perf.config.ts --run`. It:
 
-- Spins up a Postgres 16 testcontainer via `test/perf/global-setup.ts` (Docker required locally).
-- Warms up pg-boss and Postgres's plan cache (100 throwaway jobs through the lifecycle).
-- Installs pg-bossier and populates 1,000 jobs via `send → fetch → complete`.
-- Runs each of the ten read-method variants 100 times via tinybench.
-- Writes `perf-output.json` to the repo root.
-- Prints a sorted comparison table to stdout.
+- Spins up a `postgres:18-alpine` testcontainer via `test/perf/global-setup.ts` (Docker required locally).
+- Installs pg-bossier and populates `PERF_N` jobs (default 1,000) via **one bulk `INSERT … SELECT`** covering **all states** — completed, failed, retried (real multi-attempt chains), active/in-progress, cancelled, created — across 8 queues. Deterministic distribution (keyed off the row index, not RNG) so runs stay comparable; randomized chaos lives in `test/battle/`, not the bench (#21).
+- Warms the read query plans once (the bench pins `warmupIterations: 0`).
+- Runs each of the ten read-method variants 100 times via tinybench. `getRetryHistory(known)` is benched on a *retried* job; `listLongRunning` sees real active jobs; `latestPerQueue`/`countByQueue` see multi-queue cardinality.
+- Writes `perf-output.json` to the repo root; prints a sorted table to stdout.
 
-Takes ~3 minutes on a typical developer laptop. Reliably reproducible if no other CPU-heavy work is running concurrently.
+### Scale (#21)
+
+`PERF_N` scales the populate via the bulk insert, so the same bench runs at 10k / 100k / 1M without a separate file:
+
+```sh
+PERF_N=100000 npm run test:perf
+```
+
+Large-N runs are **opt-in**, not on every push: the every-push history (`perf-history.yml`) and PR diff (`perf-pr.yml`) run the default `PERF_N=1000` for fast, comparable trend data; on-demand large-N runs go through `.github/workflows/perf-scale.yml` (`workflow_dispatch` with an `n` input → uploads the result as an artifact).
+
+The default run takes ~1 minute on a typical laptop (the bulk insert is far faster than the old per-job `send → fetch → complete` populate). Reliably reproducible if no other CPU-heavy work is running concurrently.
 
 ---
 
@@ -222,24 +231,23 @@ Per-method budget = first-measurement p99 × 2.0, rounded to one significant dig
 
 ## 8. What this does NOT measure
 
-Out of scope for v1; tracked as follow-ups in [#21](https://github.com/elfensky/pg-bossier/issues/21):
+Now measured (#21, was previously out of scope): **scale** beyond 1k (`PERF_N` to 1M), **retry/failure lifecycles** (`getRetryHistory` on real multi-attempt chains), **multi-queue cardinality** (8 queues), and **active-jobs scenarios** (`listLongRunning` returns non-empty) — all via the all-states populate (§1).
 
-- Scale beyond 1,000 jobs.
-- Per-state-change trigger overhead — the populate-time-delta methodology was attempted and found unreliable at N=1000 (JIT and OS-cache noise dominate the trigger's contribution). The right path is direct DB-side timing (`pg_stat_statements`, per-call `EXPLAIN ANALYZE`).
-- Failure / retry path lifecycles — only the happy-path (send → fetch → complete) is exercised; `getRetryHistory` is timed against jobs with one attempt.
-- Multi-queue cardinality — a single queue (`perf-queue`) is used throughout.
+Still out of scope:
+
+- Per-state-change trigger overhead — the populate-time-delta methodology was attempted and found unreliable (JIT and OS-cache noise dominate the trigger's contribution). The right path is direct DB-side timing (`pg_stat_statements`, per-call `EXPLAIN ANALYZE`).
 - Concurrent workers — the bench is single-process and sequential.
-- Active-jobs scenarios — all jobs are `completed` by the time queries run; `listLongRunning` is timed but returns an empty result set.
-- The v0.3.x operational methods — `captureHealth`, `getLiveHeartbeats`, `sendTracked`, and the `{ live: true }` variants of `countByState` / `countByQueue`. The bench covers only the ten read methods listed in § 3; the live `pgboss.job` reads and the capture-health coverage sample are unbenched.
+- The v0.3.x+ operational methods — `captureHealth`, `getLiveHeartbeats`, `sendTracked`, and the `{ live: true }` variants of `countByState` / `countByQueue`. The bench covers only the ten read methods listed in § 3; the live `pgboss.job` reads and the capture-health coverage sample are unbenched.
 
 ---
 
 ## 9. Methodology details
 
-- **Warmup is mandatory.** 100 throwaway jobs go through the full lifecycle before the chronicle is built, then `TRUNCATE pgboss.job CASCADE`. This JITs pg-boss's hot paths and warms Postgres's plan cache. Without it, the first query of each shape pays a plan-cache compilation tax that distorts p99.
-- **The known-id chosen for `findById(known)` is the median-position job ID** of the 1,000 populated jobs. Avoids the favorable case (first job, likely in any cache) and the unfavorable one (last job, possibly past a scan boundary).
+- **Synthetic all-states populate (#21).** The chronicle is built by one bulk `INSERT … SELECT` over `generate_series`, not by driving pg-boss's lifecycle — that's what makes `PERF_N` scale to 1M (per-job `send → fetch → complete` would not). The bench measures *reads*, which don't care how the rows arrived. Job shapes (queue, outcome, attempt count) are a deterministic function of the row index, so the populate is identical across runs (comparable) while still covering every state + retry chains + active jobs.
+- **Warmup runs the read plans once** after populate (the bench pins `warmupIterations: 0`), so the first sample of each method doesn't pay a one-off plan-compile tax that distorts p99.
+- **The known-id for `findById(known)` / `getRetryHistory(known)` is a job with a retry chain** (`count(*) > 1`), so those are benched on a real multi-attempt job, not a 1-attempt best case.
 - **The unknown-id case uses `randomUUID()` per sample.** Forces an actual index miss every time rather than a cached negative result.
-- **All ten benches share the same testcontainer and the same 1,000 populated jobs.** No re-population between methods. This means observed variance reflects query-side noise, not setup variance.
+- **All ten benches share the same testcontainer and populate.** No re-population between methods, so observed variance reflects query-side noise, not setup variance.
 - **Vitest `bench()` is experimental** and its output format is documented as *not* following SemVer. Both `perf-write.mjs` and `perf-compare.mjs` defensively check that `mean`, `median`, and `p99` are numeric — if a future vitest minor changes the field shape, the writer/comparer fail loudly (exit 2) rather than silently emitting `NaN`.
 
 ---
@@ -256,6 +264,14 @@ Out of scope for v1; tracked as follow-ups in [#21](https://github.com/elfensky/
 | PR comparer                                | `scripts/perf-compare.mjs`                                     |
 | Write workflow (develop)                   | `.github/workflows/perf-history.yml`                           |
 | Read workflow (PRs)                        | `.github/workflows/perf-pr.yml`                                |
+| On-demand scale run (large `PERF_N`)       | `.github/workflows/perf-scale.yml`                             |
 | One-time orphan-branch init                | `docs/metrics-init.md`                                         |
 | The historical chronicle                   | `git show origin/metrics:perf-metrics.jsonl`                   |
-| Future follow-ups (tighter thresholds, scale extensions, trigger overhead) | [#21](https://github.com/elfensky/pg-bossier/issues/21) |
+
+### #21 follow-up status
+
+- **Scale extensions, realistic shapes** (items 1–4): done — `PERF_N`-scalable, all-states populate (above); on-demand large-N via `perf-scale.yml`.
+- **CI integration** (item 5): done — every-push history + PR diff (#23) at the default N; large-N opt-in via `perf-scale.yml`.
+- **Violation policy** (item 8): done by #23 — a non-required `perf-regression` status check flags a regression without blocking merge (§5).
+- **Hard budget assertions** (item 6): **superseded** — the system gates on *regression vs a fingerprinted baseline*, which is more robust across runners than static PERFORMANCE.md numbers (those stay an informational reference, §7).
+- **Per-feature budget split** (item 7): **declined** — speculative; the per-method regression gate already localizes which method regressed.
