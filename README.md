@@ -4,7 +4,7 @@
 
 An operational data plane for [pg-boss](https://github.com/timgit/pg-boss) — forensic job history, typed failure detail, retry lineage, mid-job progress, and lifecycle events. pg-bossier **layers on top of** pg-boss: it extends pg-boss, and never replaces it.
 
-> **Status — pre-release.** Tagged `v0.5.0`, **not yet published to npm** (install from a git tag — see [Install](#install)). All nine charter goals are delivered and validated across the descent-app adoption trials. Per-feature status is in [Features](#features) below; the full scope lives in [issue #1](https://github.com/elfensky/pg-bossier/issues/1).
+> **Status — `v0.6.0`, published to npm** (`npm install pg-bossier`). Pre-1.0, so the API may still change between minors (semver). All nine charter goals are delivered and validated across the descent-app adoption trials. Per-feature status is in [Features](#features) below; the full scope lives in [issue #1](https://github.com/elfensky/pg-bossier/issues/1).
 
 ## Why
 
@@ -82,27 +82,34 @@ The capture is fail-open: if it ever errors, the failure is logged and skipped �
 pg-bossier is a Postgres add-on to [pg-boss](https://github.com/timgit/pg-boss).
 Install it via npm and run the install step once against your database.
 
-### From a git URL (pre-publish)
-
-Until pg-bossier is on npm, install it directly from a tag (use the
-latest release):
+### From npm
 
 ```bash
-npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.5.0'
+npm install pg-bossier
 ```
 
-Pin to a tag (or a specific commit SHA) rather than a branch — branch
-refs in `package-lock.json` re-resolve to the branch head on every
-`npm ci`, which makes builds non-reproducible.
+The published tarball ships a prebuilt `dist/` (no build runs on install), so it
+works under hardened/script-blocking installs (`npm ci --ignore-scripts`,
+allow-scripts gating).
 
-> ⚠️ **Git-URL install requires install scripts to be allowed.** `dist/` is not
-> committed; a git dependency builds itself via the `prepare` lifecycle script
-> at install time. Under script-blocking installs (`npm ci --ignore-scripts`,
-> allow-scripts gating, hardened CI) `prepare` does not run, so `dist/` is never
-> produced and `import … from 'pg-bossier'` fails later with a confusing
-> "cannot find module `./dist/index.js`". Allow the script for pg-bossier, or
-> wait for the npm release (a prebuilt `dist/` ships in the tarball — no
-> build-on-install).
+### From a git URL (pin to a tag)
+
+To track an unreleased commit, install from a git tag:
+
+```bash
+npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.6.0'
+```
+
+Pin to a tag (or a commit SHA), not a branch — branch refs re-resolve to the
+branch head on every `npm ci` (non-reproducible).
+
+> ⚠️ **The git-URL path requires install scripts to be allowed.** `dist/` is not
+> committed; a git dependency builds itself via the `prepare` lifecycle script at
+> install time. Under script-blocking installs `prepare` doesn't run, so `dist/`
+> is never produced and `import … from 'pg-bossier'` fails later with a confusing
+> "cannot find module `./dist/index.js`". Prefer the npm install above (prebuilt
+> `dist/`, no build-on-install); use the git-URL path only when you need an
+> unreleased commit and can allow its install script.
 
 ### Programmatic install
 

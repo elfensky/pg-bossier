@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-27
+
+First release published to npm. Contains everything since the `v0.1.0` tag (the reposition, the trial-backlog batch, the claim API, the v0.5.0 descent-app-v0.61.0 batch, and the #11–#46 issue sweep) — pre-`0.6.0` versions were git-tag-only, never published.
+
 ### Added
 
 - **Tiered retention — `exportRecords` / `importRecords`** ([#46](https://github.com/elfensky/pg-bossier/issues/46)). The export/import half of retention, pairing with `prune()` (#42): export old chronicle rows to cold storage, prune them, and import them back to reconstruct history for an audit/incident — so unbounded growth has a *lossless* answer, not just a lossy one. `exportRecords(filter?, opts?)` is an **async generator** yielding `JobRecord` batches, keyset-paginated by `seq` (stable across a long export); `importRecords(records)` re-inserts them idempotently and **non-clobbering** (`ON CONFLICT (job_id, attempt) DO NOTHING`), preserving each row's original `seq` (so re-imported historical rows stay below any live `getEventsSince` cursor and don't replay). pg-bossier owns no storage destination or format — it hands you the rows as data and takes them back (file / S3 / another DB is the consumer's choice). The only serialization wrinkle is `seq` (a `bigint`): stringify it before `JSON.stringify`; `importRecords` accepts it back as a string. New exports: `exportRecords`, `importRecords`, `ExportFilter`, `ExportOptions`, `ImportResult`.
