@@ -87,8 +87,9 @@ export interface RawRecordRow {
 /**
  * Map a raw snake_case DB row to a camelCase `JobRecord`. The single `as` cast
  * is the controlled DB boundary: the state-to-output correlation is a runtime
- * invariant TypeScript cannot verify. Exported for reuse by the archive
- * export/import path (`src/archive.ts`).
+ * invariant TypeScript cannot verify. Exported for reuse by the archive export
+ * path (`exportRecords` in `src/archive.ts`; `importRecords` maps the other
+ * direction and does not call it).
  */
 export function mapRecord<TInput = unknown, TOutput = unknown>(
   r: RawRecordRow,
@@ -387,12 +388,11 @@ export async function getEventsSince<TInput = unknown, TOutput = unknown>(
   limit?: number,
 ): Promise<JobRecord<TInput, TOutput>[]> {
   const cap = Math.max(1, Math.min(limit ?? 1000, 10_000));
+  // SELECT * (like every other mapRecord reader) so a new chronicle column is
+  // picked up automatically — an explicit list silently dropped `claimed_by`
+  // when #46 added it, leaving every event row's `claimedBy` undefined.
   const { rows } = await db.query<RawRecordRow>(
-    `SELECT job_id, queue, attempt, state, data, output, progress,
-            terminal_detail, input_snapshot,
-            priority, retry_limit, singleton_key,
-            created_on, started_on, completed_on, captured_at, seq
-       FROM ${schemas.pgbossier}.record
+    `SELECT * FROM ${schemas.pgbossier}.record
       WHERE seq > $1
       ORDER BY seq ASC
       LIMIT $2`,

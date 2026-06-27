@@ -13,8 +13,10 @@ export interface InputSnapshotResult<T = unknown> {
 
 /**
  * Write a job's input snapshot to a specific `(jobId, attempt)` row in
- * `pgbossier.record`. The sole writer of the `input_snapshot` column;
- * serializes via `stringifyOrThrow`.
+ * `pgbossier.record`. The sole writer that *mutates* `input_snapshot` on an
+ * existing row (the archive `importRecords` only inserts new rows, `ON CONFLICT
+ * DO NOTHING`, so it never overwrites this slot); serializes via
+ * `stringifyOrThrow`.
  *
  * `attempt` is **required and not server-resolved** by design. Input snapshots
  * are "this exact attempt observed this exact input"; resolving `max(attempt)`
@@ -52,13 +54,17 @@ export async function recordInputSnapshot(
   }
   const json = stringifyOrThrow(snapshot, 'input_snapshot');
   try {
-    const { rowCount } = await db.query(
+    // RETURNING + rows.length, NOT rowCount: pg-boss's executeSql contract (the
+    // BYO/ORM path) guarantees only `{ rows }`, so rowCount is undefined there
+    // and the no-row warning would never fire (see claim.ts / prune.ts).
+    const { rows } = await db.query(
       `UPDATE ${schemas.pgbossier}.record
           SET input_snapshot = $3::jsonb
-        WHERE job_id = $1 AND attempt = $2`,
+        WHERE job_id = $1 AND attempt = $2
+        RETURNING job_id`,
       [jobId, attempt, json],
     );
-    if (rowCount === 0) {
+    if (rows.length === 0) {
       console.warn(
         `pgbossier: recordInputSnapshot no row for job ${jobId} attempt ${String(attempt)} — reason: not_found`,
       );

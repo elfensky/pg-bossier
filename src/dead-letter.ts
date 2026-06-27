@@ -49,7 +49,10 @@ export async function recordDeadLetter(
   }
 
   try {
-    const { rowCount } = await db.query(
+    // RETURNING + rows.length, NOT rowCount: pg-boss's executeSql contract (the
+    // BYO/ORM path) guarantees only `{ rows }`, so rowCount is undefined there
+    // and the not_found / conflict diagnostics would never fire (see claim.ts).
+    const { rows: updated } = await db.query<{ job_id: string }>(
       `
       WITH target AS (
         SELECT job_id, attempt, terminal_detail
@@ -68,11 +71,12 @@ export async function recordDeadLetter(
                           || jsonb_build_object('deadLetteredAs', $2::text)
       FROM should_write w
       WHERE r.job_id = w.job_id AND r.attempt = w.attempt
+      RETURNING r.job_id
       `,
       [sourceJobId, dlqJobId],
     );
 
-    if (rowCount === 0) {
+    if (updated.length === 0) {
       // Either (a) no failed row for sourceJobId, or (b) an existing
       // deadLetteredAs differs from the new one. Distinguish via a follow-up
       // SELECT so the warning carries an actionable reason.

@@ -34,16 +34,20 @@ export async function setProgress(
   }
   const json = stringifyOrThrow(progress, 'progress');
   try {
-    const { rowCount } = await db.query(
+    // RETURNING + rows.length, NOT rowCount: pg-boss's executeSql contract (the
+    // BYO/ORM path) guarantees only `{ rows }`, so rowCount is undefined there
+    // and the no-row warning would never fire (see claim.ts / prune.ts).
+    const { rows } = await db.query(
       `UPDATE ${schemas.pgbossier}.record
          SET progress = $2::jsonb
        WHERE job_id = $1
          AND attempt = (
            SELECT max(attempt) FROM ${schemas.pgbossier}.record WHERE job_id = $1
-         )`,
+         )
+       RETURNING job_id`,
       [jobId, json],
     );
-    if (rowCount === 0) {
+    if (rows.length === 0) {
       console.warn(
         `pgbossier: setProgress matched no record for job ${jobId} — ` +
         `is pg-bossier installed?`,
