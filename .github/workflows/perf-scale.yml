@@ -12,11 +12,17 @@ on:
         description: 'PERF_N — number of jobs to populate (e.g. 10000, 100000, 1000000)'
         required: true
         default: '100000'
+      iters:
+        description: 'PERF_ITERS — samples per method. Lower it for 1M (the O(n) scan methods × 100 iters blow the timeout); ~20 is plenty at 1M.'
+        default: '100'
 
 jobs:
   scale:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60 min: at PERF_N=1,000,000 the full-scan methods (countByState/countByQueue/
+    # listLongRunning) × iters dominate. The default 100 iters timed out at 30 min,
+    # so big-N runs should also lower PERF_ITERS (~20).
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -24,8 +30,8 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
-      - name: Run perf bench at PERF_N=${{ inputs.n }}
-        run: PERF_N='${{ inputs.n }}' npm run test:perf
+      - name: Run perf bench at PERF_N=${{ inputs.n }} PERF_ITERS=${{ inputs.iters || '100' }}
+        run: PERF_N='${{ inputs.n }}' PERF_ITERS='${{ inputs.iters || '100' }}' npm run test:perf
       - uses: actions/upload-artifact@v4
         with:
           name: perf-output-n${{ inputs.n }}

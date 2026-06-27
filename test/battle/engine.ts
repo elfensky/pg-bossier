@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { PgBoss } from 'pg-boss';
 import type { Pool } from 'pg';
 import type { SchemaNames } from '../../src/sql.js';
@@ -477,4 +478,204 @@ export async function assertWorkload(
   }
 
   if (failures.length) throw new Error(`\n${failures.join('\n\n')}`);
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// High-VOLUME storm path (storm.test.ts). The battle/soak path above verifies
+// CORRECTNESS with a per-job oracle (exact but O(N) round-trips → caps ~2000).
+// The storm trades per-job exactness for SCALE: it bulk-creates via boss.insert,
+// drives the lifecycle with explicit fetch→complete/fail, and verifies with ONE
+// aggregate SQL query — so it pushes 10k–1M real jobs through the engine to
+// surface backlog / memory / lock-contention problems the bounded path can't.
+//
+// The plan travels IN the job data (outcome + plannedFails), so neither the
+// driver nor the oracle needs an in-memory per-job map.
+// ──────────────────────────────────────────────────────────────────────────
+export interface StormData {
+  key: string;
+  outcome: Outcome;
+  plannedFails: number;
+}
+
+export interface StormResult {
+  /** Jobs inserted. */
+  total: number;
+  /** Cancel-outcome jobs cancelled from 'created'. */
+  cancelled: number;
+  /** A few completed-outcome ids, for a post-run forensic-survival spot check. */
+  sampleCompleted: string[];
+}
+
+/**
+ * Bulk-create the planned workload via `boss.insert` (chunked, per-queue) and
+ * cancel the cancel-outcome jobs from 'created' (deterministic, no race). The
+ * planned behaviour is encoded in each job's `data` so the driver + SQL oracle
+ * stay map-free → scales to 1M. Generates client-side ids so cancel/forensic
+ * sampling needs no read-back.
+ */
+export async function bulkSendWorkload(
+  boss: PgBoss, jobs: readonly PlannedJob[], opts: { chunk?: number } = {},
+): Promise<StormResult> {
+  const chunk = opts.chunk ?? 1000;
+  const byQueue = new Map<string, PlannedJob[]>();
+  for (const j of jobs) {
+    const arr = byQueue.get(j.queue);
+    if (arr) arr.push(j); else byQueue.set(j.queue, [j]);
+  }
+
+  let total = 0;
+  let cancelled = 0;
+  const sampleCompleted: string[] = [];
+
+  for (const [queue, qjobs] of byQueue) {
+    for (let i = 0; i < qjobs.length; i += chunk) {
+      const slice = qjobs.slice(i, i + chunk);
+      const inserts: PgBoss.JobInsert<StormData>[] = slice.map((j) => ({
+        id: randomUUID(),
+        data: { key: j.key, outcome: j.outcome, plannedFails: j.plannedFails },
+        retryLimit: j.retryLimit,
+        retryDelay: 0, // retries immediately re-fetchable → fast, deterministic
+        priority: j.priority,
+        singletonKey: j.singletonKey, // unique per job → no dedup
+      }));
+      await boss.insert(queue, inserts);
+      total += inserts.length;
+
+      const cancelIds: string[] = [];
+      for (let k = 0; k < slice.length; k++) {
+        const id = inserts[k]!.id!;
+        if (slice[k]!.outcome === 'cancel') cancelIds.push(id);
+        else if (slice[k]!.outcome === 'complete' && sampleCompleted.length < 20) {
+          sampleCompleted.push(id);
+        }
+      }
+      if (cancelIds.length > 0) {
+        await boss.cancel(queue, cancelIds);
+        cancelled += cancelIds.length;
+      }
+    }
+  }
+  return { total, cancelled, sampleCompleted };
+}
+
+/**
+ * Drain one queue at high throughput: fetch a batch (with metadata for
+ * `retryCount`), then `complete`/`fail` each job per its data-encoded plan.
+ * Explicit complete/fail (not throw-in-handler) so a mixed batch isn't all
+ * failed by one throw. Reuses the transient-retry + read-back reconciliation
+ * of the per-job pull driver. Runs until `signal` aborts; returns rows handled.
+ */
+export async function runStormDriver(
+  boss: PgBoss,
+  pool: Pool,
+  schemas: SchemaNames,
+  queue: string,
+  signal: AbortSignal,
+  opts: { batchSize?: number } = {},
+): Promise<number> {
+  const batchSize = opts.batchSize ?? 100;
+  let processed = 0;
+  while (!signal.aborted) {
+    const batch = await withRetry(() => boss.fetch<StormData>(queue, { batchSize, includeMetadata: true }));
+    if (!batch || batch.length === 0) { await sleep(20); continue; }
+    for (const job of batch) {
+      const fail = job.retryCount < job.data.plannedFails;
+      const apply = (): Promise<unknown> => fail
+        ? boss.fail(queue, job.id, { err: `planned ${job.retryCount}` })
+        : boss.complete(queue, job.id, { ok: true });
+      try {
+        await apply();
+      } catch (err) {
+        if (!isTransientError(err)) throw err;
+        if (!(await alreadyAdvanced(pool, schemas, job.id))) await withRetry(apply);
+      }
+      processed++;
+    }
+  }
+  return processed;
+}
+
+export interface StormOracle {
+  total: number;
+  attemptRows: number;
+  badComplete: number;
+  badRetry: number;
+  badExhaust: number;
+  badCancel: number;
+  nonTerminal: number;
+  noOutcome: number;
+  seqViolations: number;
+}
+
+/**
+ * Aggregate SQL oracle — verifies the WHOLE storm in a handful of set-based
+ * queries (no per-job round-trips). Checks: every job's current attempt reached
+ * the terminal state its outcome predicts, nothing is stuck non-terminal, the
+ * job count is exact, retries produced extra attempt rows, and `seq` is strictly
+ * ascending (the global ordering invariant) across all chronicle rows.
+ */
+export async function assertStormSql(
+  pool: Pool, schemas: SchemaNames, queues: readonly string[], expectedTotal: number,
+): Promise<StormOracle> {
+  const sc = schemas.pgbossier;
+  const { rows } = await pool.query<{
+    total: number; attempt_rows: number; bad_complete: number; bad_retry: number;
+    bad_exhaust: number; bad_cancel: number; non_terminal: number; no_outcome: number;
+  }>(
+    `WITH cur AS (
+       SELECT DISTINCT ON (job_id) job_id, state, data->>'outcome' AS outcome
+       FROM ${sc}.record WHERE queue = ANY($1)
+       ORDER BY job_id, attempt DESC
+     ), allrows AS (
+       SELECT count(*)::int AS n FROM ${sc}.record WHERE queue = ANY($1)
+     )
+     SELECT
+       (SELECT count(*)::int FROM cur)                                                          AS total,
+       (SELECT n FROM allrows)                                                                  AS attempt_rows,
+       count(*) FILTER (WHERE outcome = 'complete'          AND state <> 'completed')::int      AS bad_complete,
+       count(*) FILTER (WHERE outcome = 'retryThenComplete' AND state <> 'completed')::int      AS bad_retry,
+       count(*) FILTER (WHERE outcome = 'exhaust'           AND state <> 'failed')::int         AS bad_exhaust,
+       count(*) FILTER (WHERE outcome = 'cancel'            AND state <> 'cancelled')::int       AS bad_cancel,
+       count(*) FILTER (WHERE state NOT IN ('completed','failed','cancelled'))::int             AS non_terminal,
+       count(*) FILTER (WHERE outcome IS NULL)::int                                             AS no_outcome
+     FROM cur`,
+    [queues],
+  );
+  const r = rows[0]!;
+
+  // seq strictly ascending across all of this storm's rows (distinct + ordered).
+  const { rows: seqRows } = await pool.query<{ bad: number }>(
+    `SELECT count(*)::int AS bad FROM (
+       SELECT seq, lag(seq) OVER (ORDER BY seq) AS prev
+       FROM ${sc}.record WHERE queue = ANY($1)
+     ) t WHERE prev IS NOT NULL AND seq <= prev`,
+    [queues],
+  );
+
+  const oracle: StormOracle = {
+    total: r.total,
+    attemptRows: r.attempt_rows,
+    badComplete: r.bad_complete,
+    badRetry: r.bad_retry,
+    badExhaust: r.bad_exhaust,
+    badCancel: r.bad_cancel,
+    nonTerminal: r.non_terminal,
+    noOutcome: r.no_outcome,
+    seqViolations: seqRows[0]!.bad,
+  };
+
+  const problems: string[] = [];
+  if (oracle.total !== expectedTotal) problems.push(`distinct jobs ${oracle.total} != expected ${expectedTotal}`);
+  if (oracle.badComplete) problems.push(`${oracle.badComplete} complete-outcome jobs not 'completed'`);
+  if (oracle.badRetry) problems.push(`${oracle.badRetry} retryThenComplete jobs not 'completed'`);
+  if (oracle.badExhaust) problems.push(`${oracle.badExhaust} exhaust jobs not 'failed'`);
+  if (oracle.badCancel) problems.push(`${oracle.badCancel} cancel jobs not 'cancelled'`);
+  if (oracle.nonTerminal) problems.push(`${oracle.nonTerminal} jobs stuck non-terminal`);
+  if (oracle.noOutcome) problems.push(`${oracle.noOutcome} jobs missing data->outcome`);
+  if (oracle.attemptRows < oracle.total) problems.push(`attempt rows ${oracle.attemptRows} < jobs ${oracle.total}`);
+  if (oracle.seqViolations) problems.push(`${oracle.seqViolations} seq ordering violations`);
+  if (problems.length) {
+    throw new Error(`storm: SQL oracle failed:\n  ${problems.join('\n  ')}\n  (${JSON.stringify(oracle)})`);
+  }
+  return oracle;
 }

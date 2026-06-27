@@ -1,0 +1,41 @@
+# High-volume lifecycle storm (#46-adjacent). Pushes N real jobs through the
+# full pg-boss lifecycle in one concurrent pass to surface backlog / memory /
+# lock-contention problems the bounded battle+soak path can't (it caps ~2000 per
+# iteration). Modelled on the perf split:
+#   - on every PR: a sane default N (fast scale coverage),
+#   - on demand (workflow_dispatch): a big N (100k / 1M) before a release or
+#     after a large change — pick the size in the "Run workflow" form.
+name: Battle storm
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: 'BATTLE_STORM_N — jobs in the single storm (PR default 5000; pick 100000 / 1000000 for a big run)'
+        default: '100000'
+      workers:
+        description: 'Concurrent pull drivers'
+        default: '8'
+
+jobs:
+  storm:
+    runs-on: ubuntu-latest
+    # Generous backstop for the 1M run (the test scales its own internal budgets
+    # with N). Bump if you storm past 1M.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - name: Storm
+        env:
+          # PR runs (no inputs) get the fast default; a manual dispatch picks the size.
+          BATTLE_STORM_N: ${{ inputs.n || '5000' }}
+          BATTLE_STORM_WORKERS: ${{ inputs.workers || '8' }}
+          BATTLE_SEED: random
+          NODE_OPTIONS: --max-old-space-size=4096 # 1M plan array headroom
+        run: npm run test:storm

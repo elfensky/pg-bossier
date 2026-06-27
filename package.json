@@ -52,7 +52,8 @@
         "test": "vitest run",
         "test:types": "tsc -p tsconfig.test.json",
         "test:perf": "vitest bench --config vitest.perf.config.ts --run",
-        "test:soak": "vitest run test/battle/soak.test.ts"
+        "test:soak": "vitest run test/battle/soak.test.ts",
+        "test:storm": "vitest run test/battle/storm.test.ts"
     },
     "peerDependencies": {
         "pg-boss": "^12.18.2",

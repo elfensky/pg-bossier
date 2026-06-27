@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **High-volume lifecycle storm test** (`test/battle/storm.test.ts`, `npm run test:storm`). Pushes **10k–1M real jobs** through the full pg-boss lifecycle (bulk `boss.insert` → concurrent fetch → complete/fail/retry/cancel) in a single pass, verified by one aggregate SQL oracle — surfacing backlog/memory/lock-contention the bounded battle+soak path (capped ~2000/iteration by its serial send + per-job oracle) can't. Scales via `BATTLE_STORM_N` (default 0 = skipped, like the soak). New `.github/workflows/battle-storm.yml` runs a sane default on PRs and a big 100k/1M on demand (`workflow_dispatch`). Engine additions: `bulkSendWorkload` (chunked insert + cancel, plan encoded in job data), `runStormDriver` (explicit pull-pattern complete/fail), `assertStormSql` (set-based oracle).
+
+### Changed
+
+- **Perf scale runs** (`perf-scale.yml`): bumped the job timeout 30 → 60 min and made samples-per-method configurable via `PERF_ITERS` (default 100). A `PERF_N=1000000` run with the default 100 iterations overran the old 30-min cap (the full-scan read methods × 100 iters dominate); lower `PERF_ITERS` (~20) for 1M.
+
 ## [0.6.0] - 2026-06-27
 
 First versioned release tagged `v0.6.0` on `develop`. The npm publish is **prepared but held pending a descent-app v0.6.0 validation pass** — the package is publish-ready (prebuilt `dist/` in the tarball, `prepublishOnly` build), but `npm publish` and the `develop` → `main` release are intentionally not yet run. Contains everything since the `v0.1.0` tag (the reposition, the trial-backlog batch, the claim API, the v0.5.0 descent-app-v0.61.0 batch, and the #11–#46 issue sweep); all pre-`0.6.0` versions were git-tag-only too.

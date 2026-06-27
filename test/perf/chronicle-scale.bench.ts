@@ -29,9 +29,13 @@ import { bossier, type Bossier } from '../../src/client.js';
  */
 
 const QUEUE = 'perf-q-0'; // one of the populated queues (see global-setup.ts)
-const SAMPLES_PER_METHOD = 100;
+// Samples per method. Defaults to 100; override with PERF_ITERS for very large
+// PERF_N runs where the O(n) scan methods × 100 iters blow the CI timeout
+// (e.g. PERF_ITERS=20 for the 1M scale run). Default keeps perf-history's
+// baselines comparable.
+const SAMPLES_PER_METHOD = Math.max(1, Number(process.env['PERF_ITERS'] ?? 100));
 
-// Pin tinybench to exactly N=100 iterations. tinybench stops when BOTH the
+// Pin tinybench to exactly N iterations. tinybench stops when BOTH the
 // time budget elapses AND the iteration count is reached; setting time=0
 // and warmupIterations=0 makes iterations the only stopping condition.
 const PIN_100 = {
