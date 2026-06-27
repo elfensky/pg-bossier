@@ -74,14 +74,20 @@ export interface BossierOptions {
 
 /**
  * pg-bossier's own methods — the surface added on top of pg-boss's API:
- * the Goal 2/4/6 write methods (`recordTerminalDetail` / `recordInputSnapshot`
- * / `setProgress`), the Goal 5 operational read methods, and the Goal 7 event
- * methods. All run on the `pool` passed to `bossier()`.
+ * the write methods (`recordTerminalDetail` / `recordInputSnapshot` /
+ * `setProgress` / `setClaim` / `recordDeadLetter`), the operational read
+ * methods, the lifecycle-event methods, the live runtime-state reads, and the
+ * install/retention helpers (`migrate` / `prune` / `exportRecords` /
+ * `importRecords`). All run on pg-bossier's resolved query surface — the
+ * `db`/`pool` passed to `bossier()`, or pg-boss's own DB handle
+ * (`boss.getDb()`) when neither is given (WS-B, bring-your-own connection).
+ * `subscribeEvents` is the exception: LISTEN/NOTIFY needs a real `pool`.
  */
 export interface BossierMethods {
   /**
-   * Write a worker-classified terminal detail to a chronicle row. The sole
-   * writer of `pgbossier.record.terminal_detail`. State-bound: a `'failed'`
+   * Write a worker-classified terminal detail to a chronicle row. The primary
+   * writer of `pgbossier.record.terminal_detail` (`recordDeadLetter` co-writes
+   * only the `deadLetteredAs` key via JSONB merge). State-bound: a `'failed'`
    * payload matches rows in `state='failed'` or `state='retry'`; `'completed'`
    * and `'cancelled'` payloads each only match their own state.
    */

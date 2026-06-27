@@ -7,7 +7,7 @@ The system has two halves:
 1. **The bench** — `test/perf/chronicle-scale.bench.ts`. Vitest `bench()` blocks pinned to a deterministic N=100 samples per method against a real Postgres instance with a synthetic **all-states** populate (`PERF_N` jobs, default 1,000 — see §1). Produces `perf-output.json`.
 2. **The chronicle** — the orphan `metrics` branch holds `perf-metrics.jsonl`, one record per `develop` push, appended by CI. Every PR is diffed against the latest record and the result is posted to `$GITHUB_STEP_SUMMARY` with a non-required `perf-regression` status check.
 
-Design rationale: see `docs/superpowers/specs/2026-05-23-performance-budget-design.md` (the original methodology) and the issue [#23 thread](https://github.com/elfensky/pg-bossier/issues/23) (CI-anchored history).
+Design rationale: see `docs/superpowers/archive/2026-05-23-performance-budget-design.md` (the original methodology) and the issue [#23 thread](https://github.com/elfensky/pg-bossier/issues/23) (CI-anchored history).
 
 ---
 
@@ -48,7 +48,7 @@ The file follows vitest's benchmark JSON shape:
   "files": [{
     "filepath": "test/perf/chronicle-scale.bench.ts",
     "groups": [{
-      "fullName": "Perf — chronicle read methods (1k jobs)",
+      "fullName": "Perf — chronicle read methods (all-states populate)",
       "benchmarks": [{
         "name": "findById(known)",
         "rank": 1,
@@ -88,14 +88,14 @@ Each row in `perf-output.json` corresponds to one bench, identified by its `name
 | ------------------------------- | --------------------------- | ------------------------------------------------------------- |
 | `findById(known)`               | `findById:known`            | Single-row lookup, primary index hit                          |
 | `findById(unknown)`             | `findById:unknown`          | Single-row lookup, no hit (negative case)                     |
-| `getRetryHistory(known)`        | `getRetryHistory:known`     | All attempts for one job (no retries in populated data → 1 row) |
+| `getRetryHistory(known)`        | `getRetryHistory:known`     | All attempts for one job (benched on a real multi-attempt retry chain) |
 | `listJobs({})`                  | `listJobs:default`          | Latest-attempt view, no filter, paginated                     |
 | `listJobs({state:'completed'})` | `listJobs:state-completed`  | Latest-attempt view, single-state filter                      |
-| `listJobs({queue:'perf-queue'})`| `listJobs:queue`            | Latest-attempt view, queue filter                             |
-| `latestPerQueue(['perf-queue'])`| `latestPerQueue:single`     | Most recently created job per queue                           |
+| `listJobs({queue:'perf-q-0'})`  | `listJobs:queue`            | Latest-attempt view, queue filter                             |
+| `latestPerQueue(['perf-q-0'])`  | `latestPerQueue:single`     | Most recently created job per queue                           |
 | `countByState({})`              | `countByState:default`      | GROUP BY state, no filter                                     |
 | `countByQueue({})`              | `countByQueue:default`      | GROUP BY queue, no filter                                     |
-| `listLongRunning({900})`        | `listLongRunning:900s`      | Active jobs older than threshold (empty result in this dataset; query path still timed) |
+| `listLongRunning({900})`        | `listLongRunning:900s`      | Active jobs older than threshold (the populate leaves real active jobs, so this returns a non-empty result) |
 
 If a bench is added or removed, `scripts/perf-methods.mjs` must be updated in the same commit — both `perf-write.mjs` and `perf-compare.mjs` import from it.
 
@@ -123,7 +123,7 @@ Each record is a JSON object with this schema (`schema_version: "1.0"`):
     "image_version": "20250101.1.0",
     "runner_os": "Linux"
   },
-  "node_version": "v22.x.y",
+  "node_version": "v24.x.y",
   "vitest_version": "^4.1.7",
   "package_lock_hash": "sha256:...",
   "methods": [
@@ -192,6 +192,8 @@ When either trips, the PR summary leads with a banner: *"⚠ Baseline may be unr
 ---
 
 ## 7. Known baseline (laptop, 2026-05-23 — soft-invalidated)
+
+> _Note: these frozen labels use the pre-#21 `perf-queue` name; the current bench renamed that queue to `perf-q-0` (see §3)._
 
 The numbers below were captured on a developer laptop (macOS + Docker Desktop) **before** the bench was restructured to use vitest's `bench()` blocks. They are kept here as historical reference but **are no longer the operational baseline** — tinybench uses different warmup/timing primitives than the original hand-rolled sampler, so the absolute numbers shift.
 

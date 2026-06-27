@@ -41,6 +41,7 @@ pg-bossier reaches into none of these.
 ## Per-goal surface scope
 
 - **Goal 3 adds no new pg-boss surface.** The writer (`recordDeadLetter`) and readers (`findDeadLetterSource` / `findDeadLetterTarget`) read and write only `pgbossier.record`. (Future trigger-based DLQ detection would read `pgboss.queue.dead_letter`, but the trigger is not modified.)
+- **Tiered retention (`exportRecords` / `importRecords`, #46) adds no new pg-boss surface.** Both read/write only `pgbossier.record` through the consumer's `BossierDb` handle — no `pgboss.job` access — so neither is Transitional.
 
 ## How this doc gets updated
 
@@ -145,6 +146,8 @@ Workarounds:
 
 ### Engines
 
-pg-bossier requires Node ≥ 18.3 (for `util.parseArgs`, stabilized in
-that release). The CLI is the only piece that uses `parseArgs`; the
-JS API works on Node ≥ 18.0.
+pg-bossier requires Node ≥ 20.4.0 (`engines.node` in package.json) — the
+floor was raised to 20.4.0 for `Symbol.asyncDispose`, which the
+lifecycle-event transport uses for `await using` (and the CLI uses
+`util.parseArgs`, available since 18.3). CI runs on Node 24 (the active
+LTS), pinned via `.node-version`.

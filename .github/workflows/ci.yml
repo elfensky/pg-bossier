@@ -47,7 +47,7 @@ jobs:
           if [ "$FLOOR_MM" = "$LATEST_MM" ]; then
             echo "Floor and latest minor match — no tripwire."
           else
-            echo "::warning::pg-boss latest minor ($LATEST_MM, version $LATEST) is above the peer-dep floor minor ($FLOOR_MM, range $FLOOR_RANGE). See COMPATIBILITY.md section 'Version support — no matrix today, self-firing tripwire'."
+            echo "::warning::pg-boss latest minor ($LATEST_MM, version $LATEST) is above the peer-dep floor minor ($FLOOR_MM, range $FLOOR_RANGE). See COMPATIBILITY.md section 'Version support — floor+latest matrix + cross-version assertions'."
           fi
 
   consumer-artifact-smoke-test:

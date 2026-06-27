@@ -5,9 +5,10 @@ import pg from 'pg';
 import { bossier, type Bossier } from '../../src/client.js';
 
 /**
- * Perf bench — chronicle read methods at 1k populated jobs (issue #23).
+ * Perf bench — chronicle read methods over a synthetic all-states populate
+ * (default 1k jobs, scalable via PERF_N; see test/perf/global-setup.ts).
  *
- * Setup (testcontainer + 1k-job populate) is in `test/perf/global-setup.ts`
+ * Setup (testcontainer + synthetic all-states populate) is in `test/perf/global-setup.ts`
  * because vitest's `NodeBenchmarkRunner` does NOT invoke describe-level
  * `beforeAll` hooks. globalSetup provides `perfPgUrl` and `perfKnownJobId`
  * via vitest's `provide()`; we read them with `inject()` and build a
@@ -24,7 +25,7 @@ import { bossier, type Bossier } from '../../src/client.js';
  * reads that file in `scripts/perf-write.mjs` and `scripts/perf-compare.mjs`.
  *
  * Run via: npm run test:perf
- * Spec: docs/superpowers/specs/2026-05-23-performance-budget-design.md
+ * Spec: docs/superpowers/archive/2026-05-23-performance-budget-design.md
  */
 
 const QUEUE = 'perf-q-0'; // one of the populated queues (see global-setup.ts)

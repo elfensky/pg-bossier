@@ -80,7 +80,9 @@ function allowedStates(state: TerminalDetail['state']): string[] {
  * write. (A state-mismatch / wrong-`(jobId, attempt)` UPDATE matching zero rows
  * stays a deliberate silent no-op.)
  *
- * `recordTerminalDetail` is the *sole* writer for `pgbossier.record.terminal_detail`.
+ * `recordTerminalDetail` is the *primary* writer of `pgbossier.record.terminal_detail`:
+ * `recordDeadLetter` co-writes only the `deadLetteredAs` key via JSONB merge, and the
+ * archive `importRecords` restores the column on new rows (`ON CONFLICT DO NOTHING`).
  */
 export async function recordTerminalDetail(
   db: BossierDb,

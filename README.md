@@ -4,7 +4,7 @@
 
 An operational data plane for [pg-boss](https://github.com/timgit/pg-boss) — forensic job history, typed failure detail, retry lineage, mid-job progress, and lifecycle events. pg-bossier **layers on top of** pg-boss: it extends pg-boss, and never replaces it.
 
-> **Status — `v0.6.0`, published to npm** (`npm install pg-bossier`). Pre-1.0, so the API may still change between minors (semver). All nine charter goals are delivered and validated across the descent-app adoption trials. Per-feature status is in [Features](#features) below; the full scope lives in [issue #1](https://github.com/elfensky/pg-bossier/issues/1).
+> **Status — `v0.6.0` tagged; first npm publish prepared but not yet live.** The package is publish-ready (prebuilt `dist/` in the tarball), but `npm publish` is held pending a descent-app v0.6.0 validation pass — until then, install from the git tag (see [Install](#install)). Pre-1.0, so the API may still change between minors (semver). All nine charter goals are delivered and validated across the descent-app adoption trials. Per-feature status is in [Features](#features) below; the full scope lives in [issue #1](https://github.com/elfensky/pg-bossier/issues/1).
 
 ## Why
 
@@ -82,19 +82,10 @@ The capture is fail-open: if it ever errors, the failure is logged and skipped �
 pg-bossier is a Postgres add-on to [pg-boss](https://github.com/timgit/pg-boss).
 Install it via npm and run the install step once against your database.
 
-### From npm
+### From a git URL (pin to a tag) — current path
 
-```bash
-npm install pg-bossier
-```
-
-The published tarball ships a prebuilt `dist/` (no build runs on install), so it
-works under hardened/script-blocking installs (`npm ci --ignore-scripts`,
-allow-scripts gating).
-
-### From a git URL (pin to a tag)
-
-To track an unreleased commit, install from a git tag:
+pg-bossier is **not on npm yet** (the v0.6.0 publish is prepared but held pending
+a descent-app validation pass). Until it lands, install from the git tag:
 
 ```bash
 npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.6.0'
@@ -107,9 +98,21 @@ branch head on every `npm ci` (non-reproducible).
 > committed; a git dependency builds itself via the `prepare` lifecycle script at
 > install time. Under script-blocking installs `prepare` doesn't run, so `dist/`
 > is never produced and `import … from 'pg-bossier'` fails later with a confusing
-> "cannot find module `./dist/index.js`". Prefer the npm install above (prebuilt
-> `dist/`, no build-on-install); use the git-URL path only when you need an
-> unreleased commit and can allow its install script.
+> "cannot find module `./dist/index.js`". Allow the install script for pg-bossier,
+> or wait for the npm release below (a prebuilt `dist/` ships in the tarball — no
+> build-on-install).
+
+### From npm — once published
+
+After the v0.6.0 publish:
+
+```bash
+npm install pg-bossier
+```
+
+The published tarball ships a prebuilt `dist/` (no build runs on install), so it
+works under hardened/script-blocking installs (`npm ci --ignore-scripts`,
+allow-scripts gating) — no `prepare` re-run needed.
 
 ### Programmatic install
 
@@ -381,6 +384,7 @@ The capture trigger mirrors pg-boss's columns; the columns it leaves for the app
 - `input_snapshot` → `recordInputSnapshot` — see [Recording input snapshots](#recording-input-snapshots).
 - `terminal_detail` → `recordTerminalDetail` — see [Recording terminal detail](#recording-terminal-detail).
 - `progress` → `setProgress` — see [Job progress](#job-progress).
+- `claimed_by` → `setClaim` / `getClaim` — see [Job claim owner](#job-claim-owner). (A plain `text` column rather than JSONB, but equally an application-written slot the capture trigger leaves alone.)
 
 ### Recording terminal detail
 

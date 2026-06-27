@@ -15,8 +15,9 @@ export default defineConfig({
     hookTimeout: 5 * 60_000, // 5 min — populate + queries fit comfortably
     fileParallelism: false,
     // globalSetup runs before the bench workers spawn. It spins up the
-    // testcontainer, populates 1k jobs, and provides the connection
-    // string + median job id to the bench file via inject(). See
+    // testcontainer, populates a synthetic all-states chronicle (default
+    // 1k jobs, scalable to large N via PERF_N), and provides the connection
+    // string + a known retried job id to the bench file via inject(). See
     // test/perf/global-setup.ts. Required because vitest's bench mode
     // does NOT invoke describe-level beforeAll hooks (issue #23).
     globalSetup: ['test/perf/global-setup.ts'],
