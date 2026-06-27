@@ -12,7 +12,7 @@ on:
         description: 'Soak duration (wall-clock minutes)'
         default: '30'
       n:
-        description: 'Jobs per iteration (keep <= 2000 — engine ceiling)'
+        description: 'Jobs PER ITERATION (<=2000 battle-harness limit, not a pg-bossier cap). Total = n x iterations; scale via minutes, not n.'
         default: '200'
       seed:
         description: "Seed: a fixed number, or 'random' for a fresh interleaving each run"

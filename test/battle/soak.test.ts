@@ -25,7 +25,13 @@ import * as battle from './engine.js';
 const SCHEMAS = resolveSchemas();
 
 const MINUTES = Number(process.env['BATTLE_SOAK_MINUTES'] ?? 0);
-const N = Number(process.env['BATTLE_N'] ?? 200); // per-iteration; keep <=2000 (engine ceiling)
+// per-iteration batch size. The <=2000 guidance is a *battle-harness* ceiling
+// (sendWorkload sends serially — one boss.send per job — and the oracle verifies
+// one job at a time + getEventsSince caps at 10k), NOT a pg-bossier or pg-boss
+// engine limit. Total real-lifecycle volume = N x iterations over the soak, so
+// scale by raising BATTLE_SOAK_MINUTES, not N. (A true high-throughput single
+// pass would need batch-send + an SQL-side oracle — see the file header.)
+const N = Number(process.env['BATTLE_N'] ?? 200);
 const WORKERS = 5;
 const SEED = process.env['BATTLE_SEED'] === 'random'
   ? Math.floor(Math.random() * 2 ** 31)
