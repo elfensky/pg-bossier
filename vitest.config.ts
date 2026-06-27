@@ -23,18 +23,17 @@ export default defineConfig({
     // keep this pattern: assume the DB is dirty and reset, never boot per test.
     //
     // No state is shared between files, so file-level parallelism is safe by
-    // construction. We cap at 4 workers because every worker boots a Postgres
-    // container — unbounded parallelism (vitest's default of
-    // `os.availableParallelism() - 1`) saturates the Docker daemon on
-    // resource-constrained dev machines and measured worse than this cap. See
-    // issue #24 for the measured tradeoffs; the per-file isolation model
-    // (rather than pg-boss's schema-per-test) is tracked in #16.
+    // construction. We cap at 4 workers because every worker creates its own
+    // database + pg-boss instance against the one shared container (#16) —
+    // unbounded parallelism (vitest's default of `os.availableParallelism() - 1`)
+    // saturates Postgres connections / the Docker daemon on resource-constrained
+    // dev machines and measured worse than this cap. See issue #24 for the
+    // measured tradeoffs; the per-file isolation model is tracked in #16.
+    //
+    // Vitest 4 removed `poolOptions`; the worker count is a top-level option now
+    // (`maxWorkers`), and `pool: 'threads'` keeps the prior thread-pool model.
     fileParallelism: true,
-    poolOptions: {
-      threads: {
-        minThreads: 1,
-        maxThreads: 4,
-      },
-    },
+    pool: 'threads',
+    maxWorkers: 4,
   },
 });
