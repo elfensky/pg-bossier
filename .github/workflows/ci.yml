@@ -23,6 +23,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      - run: npm run test:types
       - run: npm test
 
   pg-boss-version-tripwire:

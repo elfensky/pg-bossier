@@ -1,4 +1,6 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { inject } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { PgBoss } from 'pg-boss';
 import pg from 'pg';
 
@@ -14,27 +16,67 @@ export interface Harness {
   teardown: () => Promise<void>;
 }
 
-export async function startHarness(): Promise<Harness> {
-  // postgres:18-alpine — ~80MB vs ~140MB, a faster pull + slightly faster boot
-  // than the standard image (#24). pg-boss is well-tested on alpine; the suite
-  // is green on it.
-  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:18-alpine').start();
-  const connectionString = container.getConnectionUri();
-  // supervise/schedule off: otherwise pg-boss's maintenance and cron loops insert
-  // jobs mid-test, the capture trigger mirrors them, and count(*) assertions flake.
+// postgres:18-alpine — ~80MB vs ~140MB, a faster pull + slightly faster boot
+// than the standard image (#24). pg-boss is well-tested on alpine.
+const IMAGE = 'postgres:18-alpine';
+
+/**
+ * Connect a fresh pg-boss + pool to a connection string, with the maintenance
+ * and cron loops OFF (`supervise`/`schedule: false`) — otherwise they insert
+ * jobs mid-test, the capture trigger mirrors them, and `count(*)` assertions
+ * flake.
+ */
+async function connectHarness(
+  connectionString: string, extraTeardown: () => Promise<void>,
+): Promise<Harness> {
   const boss = new PgBoss({ connectionString, supervise: false, schedule: false });
   await boss.start(); // creates the pgboss schema and tables
   const pool = new pg.Pool({ connectionString });
   return {
-    pool,
-    boss,
-    connectionString,
+    pool, boss, connectionString,
     teardown: async () => {
       await pool.end();
       await boss.stop();
-      await container.stop();
+      await extraTeardown();
     },
   };
+}
+
+/**
+ * The default harness for the integration suite (#16). ONE Postgres container is
+ * booted once by `test/global-setup.ts` and shared across all worker processes;
+ * each call here creates a **fresh database** inside it and connects a pg-boss +
+ * pool to that database. Isolation is per-database (default schema names, so test
+ * SQL stays unchanged), and the container boot — the slow part — happens once for
+ * the whole run instead of once per file. The DB is left for the container's
+ * global teardown to drop wholesale (cheaper than per-file DROP DATABASE, which
+ * needs all connections closed first).
+ */
+export async function startHarness(): Promise<Harness> {
+  const sharedUrl = inject('pgSharedUrl'); // provided by test/global-setup.ts
+  const dbName = `b${randomUUID().replace(/-/g, '')}`; // valid identifier, globally unique
+  const admin = new pg.Client({ connectionString: sharedUrl });
+  await admin.connect();
+  try {
+    await admin.query(`CREATE DATABASE ${dbName}`);
+  } finally {
+    await admin.end();
+  }
+  const url = new URL(sharedUrl);
+  url.pathname = `/${dbName}`;
+  // pool.end()/boss.stop() release this DB's connections on teardown; the
+  // database itself is dropped wholesale when global-setup stops the container.
+  return connectHarness(url.toString(), async () => { /* no per-db drop */ });
+}
+
+/**
+ * Boot a **dedicated** throwaway container for one harness (no shared
+ * container). Used by the perf bench's own globalSetup, which boots and owns its
+ * container directly rather than going through the shared one.
+ */
+export async function startContainerHarness(): Promise<Harness> {
+  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer(IMAGE).start();
+  return connectHarness(container.getConnectionUri(), async () => { await container.stop(); });
 }
 
 export interface RecordRow {

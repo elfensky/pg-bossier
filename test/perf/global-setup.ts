@@ -1,5 +1,5 @@
 import type { TestProject } from 'vitest/node';
-import { startHarness, type Harness } from '../harness.ts';
+import { startContainerHarness, type Harness } from '../harness.ts';
 import { install } from '../../src/install.ts';
 
 /**
@@ -42,7 +42,7 @@ async function populateLifecycle(boss: Harness['boss'], n: number): Promise<stri
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
-  harness = await startHarness();
+  harness = await startContainerHarness();
 
   // -------- Phase 0: warmup populate (untimed, discarded) --------
   // JITs pg-boss's hot paths and warms Postgres's plan cache for

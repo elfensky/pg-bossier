@@ -9,6 +9,11 @@ export default defineConfig({
     exclude: ['node_modules/**', 'dist/**', 'test/perf/**'],
     testTimeout: 60_000,
     hookTimeout: 180_000,
+    // ONE shared Postgres container for the whole run (#16): global-setup boots
+    // it and provides its URL; each file's startHarness() creates a fresh
+    // database inside it. The container boot (the slow part) happens once, not
+    // once per file.
+    globalSetup: ['test/global-setup.ts'],
     // Each integration test file creates ONE throwaway testcontainer in
     // beforeAll → startHarness() and resets state BETWEEN tests in a beforeEach
     // (drop/truncate the pgbossier schema, delete pgboss.job) — NOT a container
