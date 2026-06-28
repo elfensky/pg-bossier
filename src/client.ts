@@ -6,7 +6,8 @@ import { recordDeadLetter, type RecordDeadLetterArgs } from './dead-letter.js';
 import { setProgress, getProgress, type ProgressResult } from './progress.js';
 import { setClaim, getClaim } from './claim.js';
 import {
-  recordInputSnapshot, getInputSnapshot, type InputSnapshotResult,
+  recordInputSnapshot, getInputSnapshot, getLatestInputSnapshot,
+  type InputSnapshotResult,
 } from './input-snapshot.js';
 import {
   findById, getRetryHistory, listJobs, latestPerQueue,
@@ -207,14 +208,21 @@ export interface BossierMethods {
     jobId: string, attempt: number, snapshot: unknown,
   ) => Promise<void>;
   /**
-   * Read a job's input snapshot. With `attempt`, returns the snapshot on
-   * that exact row as `T | null`. Without `attempt`, returns the most-recent
-   * non-null snapshot as `{ snapshot, attempt } | null`.
+   * Read the input snapshot on one exact `(jobId, attempt)` row as `T | null`.
+   * For "the most recent snapshot, whatever attempt", use
+   * {@link BossierMethods.getLatestInputSnapshot}.
    */
-  getInputSnapshot: {
-    <T = unknown>(jobId: string, attempt: number): Promise<T | null>;
-    <T = unknown>(jobId: string): Promise<InputSnapshotResult<T> | null>;
-  };
+  getInputSnapshot: <T = unknown>(
+    jobId: string, attempt: number,
+  ) => Promise<T | null>;
+  /**
+   * Read a job's most-recent non-null input snapshot as
+   * `{ snapshot, attempt } | null` — the `attempt` field says which attempt it
+   * came from. For a specific attempt, use {@link BossierMethods.getInputSnapshot}.
+   */
+  getLatestInputSnapshot: <T = unknown>(
+    jobId: string,
+  ) => Promise<InputSnapshotResult<T> | null>;
   /**
    * Open a subscription to job-lifecycle events. Named `subscribeEvents` (not
    * `subscribe`) so it never shadows pg-boss's own pub/sub `subscribe(event,
@@ -340,7 +348,7 @@ export const BOSSIER_METHOD_NAMES = [
   'latestPerQueue', 'countByState', 'countByQueue', 'listLongRunning',
   'setProgress', 'getProgress',
   'setClaim', 'getClaim',
-  'recordInputSnapshot', 'getInputSnapshot',
+  'recordInputSnapshot', 'getInputSnapshot', 'getLatestInputSnapshot',
   'subscribeEvents', 'getEventsSince',
   'getLiveState', 'getLiveHeartbeat', 'getLiveHeartbeats',
   'captureHealth',
@@ -350,13 +358,13 @@ export const BOSSIER_METHOD_NAMES = [
 
 /** `subscribeEvents` needs a real pg connection an ORM adapter can't provide. */
 const SUBSCRIBE_EVENTS_NEEDS_POOL =
-  'pgbossier: subscribeEvents requires a `pool` — LISTEN/NOTIFY needs a ' +
+  'pg-bossier: subscribeEvents requires a `pool` — LISTEN/NOTIFY needs a ' +
   'dedicated pg connection that ORM adapters do not expose. Construct the ' +
   'client as bossier({ boss, pool }).';
 
 /** `autoMigrate`/`ensureInstalled` need a real pg connection the transactional installer can use. */
 const AUTO_MIGRATE_NEEDS_POOL =
-  'pgbossier: autoMigrate/ensureInstalled requires a `pool` — the transactional ' +
+  'pg-bossier: autoMigrate/ensureInstalled requires a `pool` — the transactional ' +
   'installer needs pool.connect() for BEGIN/COMMIT, which a BYO db/ORM adapter ' +
   'does not expose. Construct the client as bossier({ boss, pool }), or run ' +
   'install()/migrate() out of band.';
@@ -410,11 +418,25 @@ export function bossier(options: BossierOptions): Bossier {
     // still sees it (same cached promise), and reads are fail-soft meanwhile.
     void ensureInstalled().catch((err: unknown) => {
       console.warn(
-        `pgbossier: autoMigrate failed at startup: ${String(err)}. Reads stay ` +
+        `pg-bossier: autoMigrate failed at startup: ${String(err)}. Reads stay ` +
         `fail-soft; await ensureInstalled() to observe/retry.`,
       );
     });
   }
+
+  // Handle routing as intent, not free choice (#4): pick a verb and the right db
+  // handle is injected — a method can't be handed the wrong handle by mistake.
+  //  - read():  fail-soft readDb — a query against an uninstalled schema degrades
+  //             to empty instead of throwing (#40).
+  //  - write(): raw db — writes carry their own fail-open try/catch.
+  //  - probe(): raw db — an explicit state question (isBossierInstalled /
+  //             captureHealth) must see the TRUE state, never fail-soft to a
+  //             misleading empty/false.
+  // The few methods that also need `boss` or `pool` (live reads, subscribeEvents)
+  // stay explicit below.
+  const read = <T>(fn: (d: BossierDb) => T): T => fn(readDb);
+  const write = <T>(fn: (d: BossierDb) => T): T => fn(db);
+  const probe = <T>(fn: (d: BossierDb) => T): T => fn(db);
 
   const methods: BossierMethods = {
     sendTracked: (queue, data, options) => {
@@ -429,58 +451,49 @@ export function bossier(options: BossierOptions): Bossier {
       );
     },
     recordTerminalDetail: (jobId, attempt, payload) =>
-      recordTerminalDetail(db, s, jobId, attempt, payload),
-    recordDeadLetter: (args) => recordDeadLetter(db, s, args),
-    findDeadLetterSource: (dlqJobId) => findDeadLetterSource(readDb, s, dlqJobId),
-    findDeadLetterTarget: (sourceJobId) => findDeadLetterTarget(readDb, s, sourceJobId),
+      write((d) => recordTerminalDetail(d, s, jobId, attempt, payload)),
+    recordDeadLetter: (args) => write((d) => recordDeadLetter(d, s, args)),
+    findDeadLetterSource: (dlqJobId) => read((d) => findDeadLetterSource(d, s, dlqJobId)),
+    findDeadLetterTarget: (sourceJobId) => read((d) => findDeadLetterTarget(d, s, sourceJobId)),
     findById: <TInput = unknown, TOutput = unknown>(jobId: string) =>
-      findById<TInput, TOutput>(readDb, s, jobId),
+      read((d) => findById<TInput, TOutput>(d, s, jobId)),
     getRetryHistory: <TInput = unknown, TOutput = unknown>(jobId: string) =>
-      getRetryHistory<TInput, TOutput>(readDb, s, jobId),
+      read((d) => getRetryHistory<TInput, TOutput>(d, s, jobId)),
     listJobs: <TInput = unknown, TOutput = unknown>(opts?: ListJobsOpts) =>
-      listJobs<TInput, TOutput>(readDb, s, opts),
-    latestPerQueue: (queues, opts) => latestPerQueue(readDb, s, queues, opts),
-    countByState: (filter) => countByState(readDb, s, filter),
-    countByQueue: (filter) => countByQueue(readDb, s, filter),
-    listLongRunning: (opts) => listLongRunning(readDb, s, opts),
-    setProgress: (jobId, progress) => setProgress(db, s, jobId, progress),
+      read((d) => listJobs<TInput, TOutput>(d, s, opts)),
+    latestPerQueue: (queues, opts) => read((d) => latestPerQueue(d, s, queues, opts)),
+    countByState: (filter) => read((d) => countByState(d, s, filter)),
+    countByQueue: (filter) => read((d) => countByQueue(d, s, filter)),
+    listLongRunning: (opts) => read((d) => listLongRunning(d, s, opts)),
+    setProgress: (jobId, progress) => write((d) => setProgress(d, s, jobId, progress)),
     getProgress: <TProgress = unknown>(jobId: string) =>
-      getProgress<TProgress>(readDb, s, jobId),
-    setClaim: (jobId, ownerId) => setClaim(db, s, jobId, ownerId),
-    getClaim: (jobId) => getClaim(readDb, s, jobId),
-    // Raw db (not readDb): an explicit probe must report the TRUE installed
-    // state, never fail-soft to a misleading "false".
-    isBossierInstalled: () => isBossierInstalled(db, s),
+      read((d) => getProgress<TProgress>(d, s, jobId)),
+    setClaim: (jobId, ownerId) => write((d) => setClaim(d, s, jobId, ownerId)),
+    getClaim: (jobId) => read((d) => getClaim(d, s, jobId)),
+    isBossierInstalled: () => probe((d) => isBossierInstalled(d, s)),
     ensureInstalled,
-    prune: (opts) => prune(db, s, opts),
-    // exportRecords is a read (fail-soft readDb, async generator — returned, not awaited);
-    // importRecords is a write (raw db, errors propagate).
+    prune: (opts) => write((d) => prune(d, s, opts)),
     exportRecords: <TInput = unknown, TOutput = unknown>(
       filter?: ExportFilter, opts?: ExportOptions,
-    ) => exportRecords<TInput, TOutput>(readDb, s, filter, opts),
-    importRecords: (records) => importRecords(db, s, records),
+    ) => read((d) => exportRecords<TInput, TOutput>(d, s, filter, opts)),
+    importRecords: (records) => write((d) => importRecords(d, s, records)),
     recordInputSnapshot: (jobId, attempt, snapshot) =>
-      recordInputSnapshot(db, s, jobId, attempt, snapshot),
-    // Overloaded: dispatch at the call site to land on each of the underlying
-    // free function's two public overloads. `attempt === undefined` → the
-    // wrapped-result overload; otherwise → the `T | null` overload.
-    getInputSnapshot: <T = unknown>(jobId: string, attempt?: number) =>
-      attempt === undefined
-        ? getInputSnapshot<T>(readDb, s, jobId)
-        : getInputSnapshot<T>(readDb, s, jobId, attempt),
+      write((d) => recordInputSnapshot(d, s, jobId, attempt, snapshot)),
+    getInputSnapshot: <T = unknown>(jobId: string, attempt: number) =>
+      read((d) => getInputSnapshot<T>(d, s, jobId, attempt)),
+    getLatestInputSnapshot: <T = unknown>(jobId: string) =>
+      read((d) => getLatestInputSnapshot<T>(d, s, jobId)),
     subscribeEvents: (opts) =>
       pool === undefined
         ? Promise.reject(new Error(SUBSCRIBE_EVENTS_NEEDS_POOL))
         : subscribeEvents(pool, s, opts),
     getEventsSince: <TInput = unknown, TOutput = unknown>(
       since: bigint, limit?: number,
-    ) => getEventsSince<TInput, TOutput>(readDb, s, since, limit),
+    ) => read((d) => getEventsSince<TInput, TOutput>(d, s, since, limit)),
     getLiveState: <T = unknown>(jobId: string) => getLiveState<T>(boss, readDb, s, jobId),
     getLiveHeartbeat: (jobId) => getLiveHeartbeat(boss, readDb, s, jobId),
-    getLiveHeartbeats: (jobIds) => getLiveHeartbeats(readDb, s, jobIds),
-    // captureHealth uses the RAW db (not readDb): it must distinguish a missing
-    // install from a healthy-empty one, so it can't fail-soft to empty.
-    captureHealth: (opts) => captureHealth(db, s, opts),
+    getLiveHeartbeats: (jobIds) => read((d) => getLiveHeartbeats(d, s, jobIds)),
+    captureHealth: (opts) => probe((d) => captureHealth(d, s, opts)),
   };
   const methodNames = new Set<string>(BOSSIER_METHOD_NAMES);
 

@@ -1,4 +1,5 @@
 import type { BossierDb } from './db.js';
+import { UUID_RE } from './sql.js';
 import type { SchemaNames } from './sql.js';
 
 /** Arguments for {@link recordDeadLetter}. */
@@ -47,6 +48,15 @@ export async function recordDeadLetter(
       'pg-bossier: recordDeadLetter validation: dlqJobId must be a non-empty string',
     );
   }
+  // Short-circuit a malformed (non-UUID) id like the sibling job-id-keyed writers
+  // do, so a typo logs a clear "malformed job id" rather than a confusing
+  // Postgres uuid-cast error swallowed as a generic db_error.
+  if (!UUID_RE.test(sourceJobId) || !UUID_RE.test(dlqJobId)) {
+    console.warn(
+      `pg-bossier: recordDeadLetter got a malformed job id: source=${sourceJobId}, dlq=${dlqJobId}`,
+    );
+    return;
+  }
 
   try {
     // RETURNING + rows.length, NOT rowCount: pg-boss's executeSql contract (the
@@ -91,11 +101,11 @@ export async function recordDeadLetter(
       const head = rows[0];
       if (!head) {
         console.warn(
-          `pgbossier: recordDeadLetter no failed row for source ${sourceJobId} reason: not_found`,
+          `pg-bossier: recordDeadLetter no failed row for source ${sourceJobId} reason: not_found`,
         );
       } else if (head.existing !== null && head.existing !== dlqJobId) {
         console.warn(
-          `pgbossier: recordDeadLetter conflicting existing link for source ${sourceJobId}: ` +
+          `pg-bossier: recordDeadLetter conflicting existing link for source ${sourceJobId}: ` +
           `existing=${head.existing}, new=${dlqJobId} — first link wins reason: conflict`,
         );
       }
@@ -104,7 +114,7 @@ export async function recordDeadLetter(
     }
   } catch (err) {
     console.warn(
-      `pgbossier: recordDeadLetter failed for source ${sourceJobId}: ${String(err)} reason: db_error`,
+      `pg-bossier: recordDeadLetter failed for source ${sourceJobId}: ${String(err)} reason: db_error`,
     );
   }
 }

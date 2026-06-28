@@ -4,7 +4,7 @@
 
 An operational data plane for [pg-boss](https://github.com/timgit/pg-boss) — forensic job history, typed failure detail, retry lineage, mid-job progress, and lifecycle events. pg-bossier **layers on top of** pg-boss: it extends pg-boss, and never replaces it.
 
-> **Status — `v0.6.1` tagged; first npm publish prepared but not yet live.** The package is publish-ready (prebuilt `dist/` in the tarball), but `npm publish` is held pending a descent-app v0.6.1 validation pass — until then, install from the git tag (see [Install](#install)). Pre-1.0, so the API may still change between minors (semver). All nine charter goals are delivered and validated across the descent-app adoption trials. Per-feature status is in [Features](#features) below; the full scope lives in [issue #1](https://github.com/elfensky/pg-bossier/issues/1).
+> **Status — `v0.7.0` tagged; first npm publish prepared but not yet live.** The package is publish-ready (prebuilt `dist/` in the tarball), but `npm publish` is held pending a descent-app validation pass — until then, install from the git tag (see [Install](#install)). Pre-1.0, so the API may still change between minors (semver) — v0.7.0 carries two such breaking changes (see [CHANGELOG](CHANGELOG.md)). All nine charter goals are delivered and validated across the descent-app adoption trials. Per-feature status is in [Features](#features) below; the full scope lives in [issue #1](https://github.com/elfensky/pg-bossier/issues/1).
 
 ## Why
 
@@ -84,11 +84,11 @@ Install it via npm and run the install step once against your database.
 
 ### From a git URL (pin to a tag) — current path
 
-pg-bossier is **not on npm yet** (the v0.6.1 publish is prepared but held pending
+pg-bossier is **not on npm yet** (the v0.7.0 publish is prepared but held pending
 a descent-app validation pass). Until it lands, install from the git tag:
 
 ```bash
-npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.6.1'
+npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.7.0'
 ```
 
 Pin to a tag (or a commit SHA), not a branch — branch refs re-resolve to the
@@ -104,7 +104,7 @@ branch head on every `npm ci` (non-reproducible).
 
 ### From npm — once published
 
-After the v0.6.1 publish:
+After the v0.7.0 publish:
 
 ```bash
 npm install pg-bossier
@@ -271,7 +271,7 @@ const client = bossier({ boss }); // reads/writes go through Prisma's connection
 
 Two paths still need a real connection: `subscribeEvents` (LISTEN/NOTIFY) and `install` / `uninstall` (transactional DDL) — pass a `pool` for those (the CLI installer makes its own).
 
-**One import for everything.** `pg-bossier` re-exports pg-boss's whole surface, so `import { PgBoss, bossier, fromPrisma, getLiveState, type JobWithMetadata } from 'pg-bossier'` all resolve from the one package.
+**One import for everything.** `pg-bossier` re-exports pg-boss's whole surface, so `import { PgBoss, bossier, fromPrisma, type JobWithMetadata } from 'pg-bossier'` all resolve from the one package. Operational reads/writes (live state, prune, export, events, …) hang off the `bossier()` client rather than standalone exports — you don't hand-thread connections; the client does. Only `install` / `migrate` / `uninstall` are exported as standalone functions, since they run without a client.
 
 ### Live runtime state
 
@@ -556,9 +556,9 @@ boss.work('space-track-fetch', async (job) => {
 });
 ```
 
-#### Reader: two modes
+#### Reader: two methods
 
-Read by `(jobId, attempt)` for a specific attempt, or by `jobId` alone for the most-recent non-null snapshot across attempts. The two modes return different shapes:
+`getInputSnapshot(jobId, attempt)` reads a specific attempt; `getLatestInputSnapshot(jobId)` reads the most-recent non-null snapshot across attempts. Two single-purpose methods, each with one return shape:
 
 ```ts
 // Explicit attempt — returns T | null.
@@ -566,7 +566,7 @@ const snap = await client.getInputSnapshot<SpaceTrackPayload>(jobId, 0);
 // → the snapshot value, or null if that (jobId, attempt) has no snapshot.
 
 // Most-recent across attempts — returns { snapshot, attempt } | null.
-const result = await client.getInputSnapshot<SpaceTrackPayload>(jobId);
+const result = await client.getLatestInputSnapshot<SpaceTrackPayload>(jobId);
 // → { snapshot: <value>, attempt: 2 }
 //   or null if the job has no snapshot on any attempt.
 ```

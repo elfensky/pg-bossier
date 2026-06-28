@@ -48,9 +48,9 @@ expectTypeOf(client.listJobs<Order, Receipt>())
 expectTypeOf(client.getProgress<{ pct: number }>('id'))
   .resolves.toEqualTypeOf<ProgressResult<{ pct: number }> | null>();
 
-// getInputSnapshot is dual-mode: with an attempt → T | null; without → wrapped.
+// getInputSnapshot wants a specific attempt → T | null; getLatestInputSnapshot → wrapped.
 expectTypeOf(client.getInputSnapshot<Order>('id', 0)).resolves.toEqualTypeOf<Order | null>();
-expectTypeOf(client.getInputSnapshot<Order>('id')).resolves.toEqualTypeOf<InputSnapshotResult<Order> | null>();
+expectTypeOf(client.getLatestInputSnapshot<Order>('id')).resolves.toEqualTypeOf<InputSnapshotResult<Order> | null>();
 
 // setClaim is the #41a compare-and-set: resolves to boolean (won/lost).
 expectTypeOf(client.setClaim('id', 'worker')).resolves.toEqualTypeOf<boolean>();

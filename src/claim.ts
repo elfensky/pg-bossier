@@ -39,7 +39,7 @@ export async function setClaim(
   // Short-circuit a malformed (non-UUID) id like getClaim does, so a typo logs a
   // clear "malformed job id" rather than a confusing Postgres uuid-cast error.
   if (!UUID_RE.test(jobId)) {
-    console.warn(`pgbossier: setClaim got a malformed job id: ${jobId}`);
+    console.warn(`pg-bossier: setClaim got a malformed job id: ${jobId}`);
     return false;
   }
   try {
@@ -62,7 +62,7 @@ export async function setClaim(
     // Quiet on a missing install (the documented normal `false` outcome); warn
     // only on a real DB fault. Fail-open either way.
     if (!isUndefinedTable(err)) {
-      console.warn(`pgbossier: setClaim failed for job ${jobId}: ${String(err)}`);
+      console.warn(`pg-bossier: setClaim failed for job ${jobId}: ${String(err)}`);
     }
     return false;
   }

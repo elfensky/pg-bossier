@@ -33,7 +33,7 @@ test('every record read fails soft (returns empty, never throws) when not instal
   expect(await client.getRetryHistory(UUID)).toEqual([]);
   expect(await client.getClaim(UUID)).toBeNull();
   expect(await client.getProgress(UUID)).toBeNull();
-  expect(await client.getInputSnapshot(UUID)).toBeNull();
+  expect(await client.getLatestInputSnapshot(UUID)).toBeNull();
   expect(await client.listJobs()).toEqual({ rows: [], total: 0 });
   expect(await client.latestPerQueue(['q'])).toEqual([]);
   expect(await client.listLongRunning()).toEqual([]);

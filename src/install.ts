@@ -39,7 +39,7 @@ function resolveBackfillChunk(size: number | undefined): number {
   if (size === undefined) return DEFAULT_BACKFILL_CHUNK;
   if (!Number.isInteger(size) || size <= 0) {
     throw new Error(
-      `pgbossier: backfillChunkSize must be a positive integer, got ${String(size)}`,
+      `pg-bossier: backfillChunkSize must be a positive integer, got ${String(size)}`,
     );
   }
   return size;

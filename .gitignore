@@ -37,3 +37,7 @@ Thumbs.db
 # AI
 .claude
 .claude-octopus
+
+# desloppify code-health tool state (local only)
+.desloppify/
+scorecard.png

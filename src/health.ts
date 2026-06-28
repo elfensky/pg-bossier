@@ -72,7 +72,7 @@ export async function captureHealth(
   // Only validate sampleLimit when it's actually used (coverage on).
   if (coverageEnabled && (!Number.isInteger(sampleLimit) || sampleLimit <= 0)) {
     throw new Error(
-      `sampleLimit must be a positive integer, got ${String(sampleLimit)}`,
+      `pg-bossier: sampleLimit must be a positive integer, got ${String(sampleLimit)}`,
     );
   }
 

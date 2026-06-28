@@ -2,7 +2,7 @@ import { test, expect, beforeAll, afterAll, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { startHarness, getRecords, type Harness } from './harness.js';
 import { install } from '../src/install.js';
-import { recordInputSnapshot, getInputSnapshot } from '../src/input-snapshot.js';
+import { recordInputSnapshot, getInputSnapshot, getLatestInputSnapshot } from '../src/input-snapshot.js';
 import { getRetryHistory } from '../src/read.js';
 import { resolveSchemas } from '../src/sql.js';
 import { bossier } from '../src/client.js';
@@ -31,14 +31,14 @@ test('recordInputSnapshot + getInputSnapshot round-trip with explicit attempt', 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test 2 — Happy round-trip without attempt (returns wrapped result).
 // ─────────────────────────────────────────────────────────────────────────────
-test('getInputSnapshot without attempt returns the wrapped {snapshot, attempt} result', async () => {
+test('getLatestInputSnapshot returns the wrapped {snapshot, attempt} result', async () => {
   const queue = 'is-happy-wrapped';
   await h.boss.createQueue(queue);
   const jobId = await h.boss.send(queue, {});
 
   await recordInputSnapshot(h.pool, SCHEMAS, jobId!, 0, { records: ['a', 'b'] });
 
-  const result = await getInputSnapshot<{ records: string[] }>(h.pool, SCHEMAS, jobId!);
+  const result = await getLatestInputSnapshot<{ records: string[] }>(h.pool, SCHEMAS, jobId!);
   expect(result).toEqual({ snapshot: { records: ['a', 'b'] }, attempt: 0 });
 });
 
@@ -55,7 +55,7 @@ test('reader explicit-attempt returns T; reader without attempt returns wrapped 
   const explicit = await getInputSnapshot<{ phase: string }>(h.pool, SCHEMAS, jobId!, 0);
   expect(explicit).toEqual({ phase: 'one' });
 
-  const wrapped = await getInputSnapshot<{ phase: string }>(h.pool, SCHEMAS, jobId!);
+  const wrapped = await getLatestInputSnapshot<{ phase: string }>(h.pool, SCHEMAS, jobId!);
   expect(wrapped).toEqual({ snapshot: { phase: 'one' }, attempt: 0 });
 });
 
@@ -63,7 +63,7 @@ test('reader explicit-attempt returns T; reader without attempt returns wrapped 
 // Test 4 — Reader UUID guard: malformed jobId resolves to null without hitting DB.
 // ─────────────────────────────────────────────────────────────────────────────
 test('getInputSnapshot UUID guard: malformed jobId resolves to null', async () => {
-  await expect(getInputSnapshot(h.pool, SCHEMAS, 'not-a-uuid')).resolves.toBeNull();
+  await expect(getLatestInputSnapshot(h.pool, SCHEMAS, 'not-a-uuid')).resolves.toBeNull();
   await expect(getInputSnapshot(h.pool, SCHEMAS, 'not-a-uuid', 0)).resolves.toBeNull();
 });
 
@@ -72,7 +72,7 @@ test('getInputSnapshot UUID guard: malformed jobId resolves to null', async () =
 // ─────────────────────────────────────────────────────────────────────────────
 test('getInputSnapshot returns null for unknown jobId', async () => {
   const phantom = randomUUID();
-  await expect(getInputSnapshot(h.pool, SCHEMAS, phantom)).resolves.toBeNull();
+  await expect(getLatestInputSnapshot(h.pool, SCHEMAS, phantom)).resolves.toBeNull();
   await expect(getInputSnapshot(h.pool, SCHEMAS, phantom, 0)).resolves.toBeNull();
 });
 
@@ -229,8 +229,8 @@ function _narrowingFixture(client: ReturnType<typeof bossier>): void {
       const _x: number = a.x;
       void _x;
     }
-    // Omitted attempt: InputSnapshotResult<T> | null
-    const b = await client.getInputSnapshot<{ x: number }>(
+    // Latest snapshot: InputSnapshotResult<T> | null
+    const b = await client.getLatestInputSnapshot<{ x: number }>(
       '00000000-0000-0000-0000-000000000000',
     );
     if (b) {

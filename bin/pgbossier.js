@@ -112,7 +112,7 @@ try {
   if (err && err.code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION') {
     console.error(`pgbossier: ${err.message}`);
     exitCode = 1;
-  } else if (err instanceof Error && /pgbossier:.*schema name/.test(err.message)) {
+  } else if (err instanceof Error && /pg-?bossier:.*schema name/.test(err.message)) {
     console.error(err.message);
     exitCode = 64;
   } else {

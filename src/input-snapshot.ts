@@ -66,55 +66,54 @@ export async function recordInputSnapshot(
     );
     if (rows.length === 0) {
       console.warn(
-        `pgbossier: recordInputSnapshot no row for job ${jobId} attempt ${String(attempt)} — reason: not_found`,
+        `pg-bossier: recordInputSnapshot no row for job ${jobId} attempt ${String(attempt)} — reason: not_found`,
       );
     }
   } catch (err) {
     console.warn(
-      `pgbossier: recordInputSnapshot failed for job ${jobId} attempt ${String(attempt)}: ${String(err)} — reason: db_error`,
+      `pg-bossier: recordInputSnapshot failed for job ${jobId} attempt ${String(attempt)}: ${String(err)} — reason: db_error`,
     );
   }
 }
 
 /**
- * Read a job's input snapshot.
- *
- * Dual-mode:
- *  - When `attempt` is provided, returns the snapshot stored on that exact
- *    `(jobId, attempt)` row as `T | null`. `null` if no row matches or the
- *    column is SQL NULL.
- *  - When `attempt` is omitted, returns the most-recent non-null snapshot as
- *    `{snapshot: T, attempt: number} | null`. `null` if no attempt ever wrote
- *    a snapshot. Mirrors `getProgress`'s `ProgressResult` shape.
+ * Read the input snapshot stored on one exact `(jobId, attempt)` row as
+ * `T | null` — `null` if no row matches or the column is SQL NULL. Use this
+ * when you know which attempt you want; use {@link getLatestInputSnapshot} for
+ * "the most recent one, whatever attempt it was".
  *
  * A malformed (non-UUID) `jobId` short-circuits to `null` without a query
  * (matches `src/progress.ts`'s pattern).
  */
 export async function getInputSnapshot<T = unknown>(
   db: BossierDb, schemas: SchemaNames, jobId: string, attempt: number,
-): Promise<T | null>;
-export async function getInputSnapshot<T = unknown>(
-  db: BossierDb, schemas: SchemaNames, jobId: string,
-): Promise<InputSnapshotResult<T> | null>;
-export async function getInputSnapshot<T = unknown>(
-  db: BossierDb,
-  schemas: SchemaNames,
-  jobId: string,
-  attempt?: number,
-): Promise<T | InputSnapshotResult<T> | null> {
+): Promise<T | null> {
   if (!UUID_RE.test(jobId)) return null;
-  if (attempt !== undefined) {
-    const { rows } = await db.query<{ snapshot: unknown }>(
-      `SELECT input_snapshot AS snapshot
-         FROM ${schemas.pgbossier}.record
-        WHERE job_id = $1 AND attempt = $2
-        LIMIT 1`,
-      [jobId, attempt],
-    );
-    const row = rows[0];
-    if (!row || row.snapshot === null) return null;
-    return row.snapshot as T;
-  }
+  const { rows } = await db.query<{ snapshot: unknown }>(
+    `SELECT input_snapshot AS snapshot
+       FROM ${schemas.pgbossier}.record
+      WHERE job_id = $1 AND attempt = $2
+      LIMIT 1`,
+    [jobId, attempt],
+  );
+  const row = rows[0];
+  if (!row || row.snapshot === null) return null;
+  return row.snapshot as T;
+}
+
+/**
+ * Read a job's most-recent non-null input snapshot as
+ * `{snapshot: T, attempt: number} | null` — `null` if no attempt ever wrote a
+ * snapshot. The `attempt` field tells you which attempt it came from. Mirrors
+ * `getProgress`'s `ProgressResult` shape. Use {@link getInputSnapshot} when you
+ * want a specific attempt instead.
+ *
+ * A malformed (non-UUID) `jobId` short-circuits to `null` without a query.
+ */
+export async function getLatestInputSnapshot<T = unknown>(
+  db: BossierDb, schemas: SchemaNames, jobId: string,
+): Promise<InputSnapshotResult<T> | null> {
+  if (!UUID_RE.test(jobId)) return null;
   const { rows } = await db.query<{ snapshot: unknown; attempt: number }>(
     `SELECT input_snapshot AS snapshot, attempt
        FROM ${schemas.pgbossier}.record

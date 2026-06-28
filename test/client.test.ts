@@ -221,6 +221,6 @@ test('client.recordInputSnapshot + getInputSnapshot via the proxy', async () => 
   const explicit = await client.getInputSnapshot<{ records: string[] }>(jobId!, 0);
   expect(explicit).toEqual({ records: ['a', 'b'] });
 
-  const wrapped = await client.getInputSnapshot<{ records: string[] }>(jobId!);
+  const wrapped = await client.getLatestInputSnapshot<{ records: string[] }>(jobId!);
   expect(wrapped).toEqual({ snapshot: { records: ['a', 'b'] }, attempt: 0 });
 });

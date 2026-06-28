@@ -1,5 +1,6 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, getRecords, type Harness } from './harness.js';
+import { waitFor } from './wait.js';
 import { install } from '../src/install.js';
 import { recordTerminalDetail } from '../src/terminal-detail.js';
 import { recordInputSnapshot } from '../src/input-snapshot.js';
@@ -233,11 +234,14 @@ test('trigger publishes pg_notify on pgbossier_job with identity + seq', async (
   const jobId = await h.boss.send(queue, { hello: 'evt' });
   await h.boss.fetch(queue);
   await h.boss.complete(queue, jobId!, { ok: true });
-  await new Promise((r) => setTimeout(r, 100));
 
-  const forQueue = received
-    .map((ev) => ({ ...ev, parsed: JSON.parse(ev.payload!) as Record<string, unknown> }))
-    .filter((ev) => ev.parsed.queue === queue);
+  const forFn = (): { channel: string; payload: string | undefined; parsed: Record<string, unknown> }[] =>
+    received
+      .map((ev) => ({ ...ev, parsed: JSON.parse(ev.payload!) as Record<string, unknown> }))
+      .filter((ev) => ev.parsed.queue === queue);
+  await waitFor(() => forFn().length >= 3, { message: '3 pg_notify events' });
+
+  const forQueue = forFn();
   expect(forQueue).toHaveLength(3);
   for (const ev of forQueue) {
     expect(ev.channel).toBe('pgbossier_job');

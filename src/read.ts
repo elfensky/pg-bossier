@@ -171,7 +171,7 @@ const ORDER_COLUMNS = {
 function resolveLimit(limit: number | undefined): number {
   if (limit === undefined) return DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit <= 0) {
-    throw new Error(`limit must be a positive integer, got ${String(limit)}`);
+    throw new Error(`pg-bossier: limit must be a positive integer, got ${String(limit)}`);
   }
   return Math.min(limit, MAX_LIMIT);
 }
@@ -179,7 +179,7 @@ function resolveLimit(limit: number | undefined): number {
 function resolveOffset(offset: number | undefined): number {
   if (offset === undefined) return 0;
   if (!Number.isInteger(offset) || offset < 0) {
-    throw new Error(`offset must be a non-negative integer, got ${String(offset)}`);
+    throw new Error(`pg-bossier: offset must be a non-negative integer, got ${String(offset)}`);
   }
   return offset;
 }
@@ -194,7 +194,7 @@ function buildWhere(
   filter: JobFilter, queueColumn = 'queue',
 ): { clause: string; params: unknown[] } {
   if (filter.queue !== undefined && filter.queues !== undefined) {
-    throw new Error('JobFilter: set either `queue` or `queues`, not both');
+    throw new Error('pg-bossier: JobFilter: set either `queue` or `queues`, not both');
   }
   const conds: string[] = [];
   const params: unknown[] = [];
@@ -351,7 +351,7 @@ export async function listLongRunning(
   const seconds = opts.longerThanSeconds ?? DEFAULT_LONG_RUNNING_SECONDS;
   if (!Number.isFinite(seconds) || seconds < 0) {
     throw new Error(
-      `longerThanSeconds must be a non-negative number, got ${String(seconds)}`,
+      `pg-bossier: longerThanSeconds must be a non-negative number, got ${String(seconds)}`,
     );
   }
   const params: unknown[] = [seconds];

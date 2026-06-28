@@ -17,10 +17,6 @@ export function isUndefinedTable(err: unknown): boolean {
   return typeof e.message === 'string' && /relation .* does not exist/i.test(e.message);
 }
 
-// Warn at most once per process so a hot path (e.g. getClaim on an auth route)
-// against a missing install doesn't flood the log.
-let warned = false;
-
 /**
  * Wrap a {@link BossierDb} so reads degrade **fail-soft** (#40): if a query
  * throws `undefined_table` (pg-bossier not installed yet), resolve to an empty
@@ -43,6 +39,11 @@ let warned = false;
  * silently break the more important fail-soft on the consumer's own ORM path.
  */
 export function softReadDb(db: BossierDb): BossierDb {
+  // Warn at most once per wrapper (i.e. per bossier() client) so a hot path
+  // (e.g. getClaim on an auth route) against a missing install doesn't flood the
+  // log. Per-wrapper, not per-process: a fresh client gets a fresh latch, so the
+  // warning isn't suppressed across independent clients/tests in one worker.
+  let warned = false;
   return {
     query: async <R extends QueryResultRow = QueryResultRow>(
       text: string, params?: unknown[],
@@ -54,7 +55,7 @@ export function softReadDb(db: BossierDb): BossierDb {
         if (!warned) {
           warned = true;
           console.warn(
-            'pgbossier: a read returned empty because the pgbossier schema is not ' +
+            'pg-bossier: a read returned empty because the pgbossier schema is not ' +
             'installed — run install()/migrate() or construct bossier({ autoMigrate: true }). ' +
             '(warns once)',
           );

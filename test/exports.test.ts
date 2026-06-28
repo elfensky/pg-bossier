@@ -14,20 +14,24 @@ test('re-exports pg-boss class + ORM adapters from one entry point', () => {
 });
 
 test('exposes pg-bossier own API from the same entry point', () => {
+  // The value surface is deliberately minimal: the client factory + the three
+  // provisioning functions that run without a client. Everything else hangs off
+  // the bossier() client (see the next test).
   expect(typeof api.bossier).toBe('function');
   expect(typeof api.install).toBe('function');
   expect(typeof api.migrate).toBe('function');
   expect(typeof api.uninstall).toBe('function');
-  expect(typeof api.subscribeEvents).toBe('function');
-  expect(typeof api.getLiveState).toBe('function');
-  expect(typeof api.getLiveHeartbeat).toBe('function');
-  expect(typeof api.getLiveHeartbeats).toBe('function');
-  expect(typeof api.captureHealth).toBe('function');
-  expect(typeof api.pgBossDb).toBe('function');
 });
 
-test('pg-bossier own exports win over pg-boss star re-exports (no shadowing)', () => {
-  // subscribeEvents is pg-bossier's, not pg-boss's (pg-boss has no such export);
-  // confirms the explicit export is what a consumer gets.
-  expect(api.subscribeEvents.name).toBe('subscribeEvents');
+test('operational free functions are NOT standalone value exports — go through the client', () => {
+  // These take pg-bossier's internal (db, schemas, …) convention; consumers reach
+  // them as bossier() client methods, never as hand-threaded standalone calls.
+  const internalOnly = [
+    'subscribeEvents', 'getLiveState', 'getLiveHeartbeat', 'getLiveHeartbeats',
+    'captureHealth', 'isBossierInstalled', 'prune', 'exportRecords',
+    'importRecords', 'pgBossDb',
+  ] as const;
+  for (const name of internalOnly) {
+    expect((api as Record<string, unknown>)[name]).toBeUndefined();
+  }
 });

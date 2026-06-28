@@ -227,7 +227,7 @@ class BossierEventsImpl extends EventEmitter implements BossierEvents {
         typeof attempt !== 'number' || typeof state !== 'string' ||
         (typeof seq !== 'number' && typeof seq !== 'string') ||
         typeof captured_at !== 'string') {
-      this.emitError('parse', new Error(`pgbossier: malformed notification payload: ${msg.payload}`));
+      this.emitError('parse', new Error(`pg-bossier: malformed notification payload: ${msg.payload}`));
       return;
     }
 

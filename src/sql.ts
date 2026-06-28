@@ -42,31 +42,31 @@ const RESERVED_KEYWORDS = new Set([
 export function assertSchemaName(name: string, key: keyof SchemaNames): void {
   if (!IDENT_RE.test(name)) {
     throw new Error(
-      `pgbossier: invalid ${key} schema name: ${JSON.stringify(name)}. ` +
+      `pg-bossier: invalid ${key} schema name: ${JSON.stringify(name)}. ` +
       `Must match ${IDENT_RE.source}.`,
     );
   }
   if (name.startsWith('pg_')) {
     throw new Error(
-      `pgbossier: schema name ${JSON.stringify(name)} is reserved — ` +
+      `pg-bossier: schema name ${JSON.stringify(name)} is reserved — ` +
       `Postgres reserves the 'pg_' prefix for system schemas.`,
     );
   }
   if (RESERVED_SCHEMA_NAMES.has(name)) {
     throw new Error(
-      `pgbossier: schema name ${JSON.stringify(name)} is reserved — ` +
+      `pg-bossier: schema name ${JSON.stringify(name)} is reserved — ` +
       `using it would conflict with user data or system catalogs.`,
     );
   }
   if (RESERVED_KEYWORDS.has(name)) {
     throw new Error(
-      `pgbossier: schema name ${JSON.stringify(name)} is a Postgres ` +
+      `pg-bossier: schema name ${JSON.stringify(name)} is a Postgres ` +
       `reserved keyword and cannot be used as a bare identifier.`,
     );
   }
   if (Buffer.byteLength(name, 'utf8') > 63) {
     throw new Error(
-      `pgbossier: schema name ${JSON.stringify(name)} exceeds 63 bytes ` +
+      `pg-bossier: schema name ${JSON.stringify(name)} exceeds 63 bytes ` +
       `(NAMEDATALEN). Postgres would silently truncate it.`,
     );
   }
@@ -223,7 +223,7 @@ BEGIN
       )::text
     );
   EXCEPTION WHEN OTHERS THEN
-    RAISE WARNING 'pgbossier: capture failed for job %: %', NEW.id, SQLERRM;
+    RAISE WARNING 'pg-bossier: capture failed for job %: %', NEW.id, SQLERRM;
   END;
   RETURN NULL;
 END;

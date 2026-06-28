@@ -45,10 +45,10 @@ export async function* exportRecords<TInput = unknown, TOutput = unknown>(
 ): AsyncGenerator<JobRecord<TInput, TOutput>[]> {
   const batchSize = opts.batchSize ?? DEFAULT_BATCH;
   if (!Number.isInteger(batchSize) || batchSize <= 0) {
-    throw new Error(`pgbossier: exportRecords batchSize must be a positive integer, got ${String(batchSize)}`);
+    throw new Error(`pg-bossier: exportRecords batchSize must be a positive integer, got ${String(batchSize)}`);
   }
   if (filter.queue !== undefined && filter.queues !== undefined) {
-    throw new Error('pgbossier: exportRecords: set either `queue` or `queues`, not both');
+    throw new Error('pg-bossier: exportRecords: set either `queue` or `queues`, not both');
   }
 
   let afterSeq = 0n; // keyset cursor: seq > afterSeq

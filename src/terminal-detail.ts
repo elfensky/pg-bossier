@@ -108,7 +108,7 @@ export async function recordTerminalDetail(
   // Short-circuit a malformed (non-UUID) id like the sibling writers, so a typo
   // logs a clear "malformed job id" rather than a Postgres uuid-cast error.
   if (!UUID_RE.test(jobId)) {
-    console.warn(`pgbossier: recordTerminalDetail got a malformed job id: ${jobId}`);
+    console.warn(`pg-bossier: recordTerminalDetail got a malformed job id: ${jobId}`);
     return;
   }
   const states = allowedStates(payload.state);
@@ -123,7 +123,7 @@ export async function recordTerminalDetail(
     );
   } catch (err) {
     console.warn(
-      `pgbossier: recordTerminalDetail failed for job ${jobId} attempt ${String(attempt)}: ${String(err)}`,
+      `pg-bossier: recordTerminalDetail failed for job ${jobId} attempt ${String(attempt)}: ${String(err)}`,
     );
   }
 }

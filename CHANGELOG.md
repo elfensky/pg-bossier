@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-28
+
+Minor bump tagged `v0.7.0` on `develop` — a post-0.6.1 API-consistency cleanup from a code-health (desloppify subjective) review. Two **pre-1.0 breaking** changes (the `getInputSnapshot` split and the trimmed standalone export surface); the rest is internal/cosmetic. No new capability. The first npm publish and the `develop` → `main` release stay **held pending a descent-app validation pass** — the publish gate moves from v0.6.1 to **v0.7.0**.
+
+### Changed
+
+- **BREAKING: `getInputSnapshot` split into two single-purpose methods.** The old dual-mode reader (`getInputSnapshot(jobId)` → wrapped result, `getInputSnapshot(jobId, attempt)` → bare value) is now two methods, each with one return shape: `getInputSnapshot(jobId, attempt): Promise<T | null>` (a specific attempt) and `getLatestInputSnapshot(jobId): Promise<InputSnapshotResult<T> | null>` (most-recent across attempts). Migration: a no-`attempt` call becomes `getLatestInputSnapshot(jobId)`. Also removes the overload-dispatch the client had to mirror.
+- **BREAKING: trimmed the package's standalone value exports.** Only `bossier` and the provisioning functions `install` / `migrate` / `uninstall` are exported as callable functions now. The per-feature operational functions (`prune`, `captureHealth`, `getLiveState` / `getLiveHeartbeat` / `getLiveHeartbeats`, `subscribeEvents`, `exportRecords` / `importRecords`, `isBossierInstalled`, `pgBossDb`) are no longer re-exported from `pg-bossier` — they took pg-bossier's internal `(db, schemas, …)` calling convention, a footgun consumers shouldn't hand-thread. Reach them as `bossier()` client methods instead. All type exports are unchanged.
+- **Internal: db-handle routing is now structural, not comment-convention.** The client routes each method through a `read` (fail-soft) / `write` (raw) / `probe` (raw, must-see-true-state) injector instead of hand-picking `db` / `readDb` per method, so a method can't be wired to the wrong handle by mistake. No behavior change.
+- **Standardized all error/warning message prefixes to `pg-bossier:`** across `src` (some throws/warns used `pgbossier:` without the hyphen, or no prefix at all). The CLI's reserved-schema exit-64 match tolerates both spellings.
+
+### Fixed
+
+- **`recordDeadLetter` now short-circuits a malformed (non-UUID) job id** with a clear "malformed job id" warning, matching its five sibling job-id-keyed writers (previously a bad id degraded to a generic `db_error`).
+- **The not-installed fail-soft warn-once latch is now per-client, not per-process** (`softReadDb` closure instead of a module global), so independent clients/tests in one worker no longer suppress each other's warning.
+
+### Tests
+
+- Replaced fixed `setTimeout` waits that gated assertions on LISTEN/NOTIFY / trigger propagation with a deadline-bounded `waitFor` poll helper (`test/wait.ts`) — removes a CI flake vector. Genuine timing tests (reconnect/backoff, idle-session-timeout) and negative "nothing fires" assertions keep their fixed waits.
+
 ## [0.6.1] - 2026-06-28
 
 Patch release tagged `v0.6.1` on `develop` for the descent-app **v0.6.1** validation pass (install via the git tag until then). Bug fixes to the bring-your-own-connection (ORM) path and lifecycle events, plus test/CI tooling — no public API change. The first npm publish and the `develop` → `main` release stay **held pending that validation**.

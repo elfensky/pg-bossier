@@ -49,12 +49,12 @@ export async function setProgress(
     );
     if (rows.length === 0) {
       console.warn(
-        `pgbossier: setProgress matched no record for job ${jobId} — ` +
+        `pg-bossier: setProgress matched no record for job ${jobId} — ` +
         `is pg-bossier installed?`,
       );
     }
   } catch (err) {
-    console.warn(`pgbossier: setProgress failed for job ${jobId}: ${String(err)}`);
+    console.warn(`pg-bossier: setProgress failed for job ${jobId}: ${String(err)}`);
   }
 }
 

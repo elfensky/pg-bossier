@@ -1,5 +1,6 @@
 import { test, expect, beforeAll, afterAll } from 'vitest';
 import { startHarness, type Harness } from './harness.js';
+import { waitFor } from './wait.js';
 import { install } from '../src/install.js';
 import { subscribeEvents } from '../src/events.js';
 import { resolveSchemas } from '../src/sql.js';
@@ -55,7 +56,7 @@ test('five event types fire for a job that fails-with-retry-then-succeeds', asyn
   await h.boss.fail(queue, jobId!, { err: 'x' });
   await h.boss.fetch(queue);
   await h.boss.complete(queue, jobId!, { ok: true });
-  await new Promise((r) => setTimeout(r, 200));
+  await waitFor(() => seen.length >= 5, { message: '5 lifecycle events' });
 
   // pg-boss retries by DELETE+INSERT with state='retry' (same retry_count=0),
   // then fetchNextJob UPDATEs retry_count to 1 and state='active' in one step.
@@ -81,7 +82,7 @@ test("catch-all 'job' listener receives every transition", async () => {
   const jobId = await h.boss.send(queue, {});
   await h.boss.fetch(queue);
   await h.boss.complete(queue, jobId!, { ok: true });
-  await new Promise((r) => setTimeout(r, 100));
+  await waitFor(() => all.length >= 3, { message: '3 transitions' });
 
   expect(all).toEqual(['created', 'started', 'completed']);
   await events.close();
@@ -98,7 +99,11 @@ test("per-type event fires before 'job' for the same transition", async () => {
   const jobId = await h.boss.send(queue, {});
   await h.boss.fetch(queue);
   await h.boss.complete(queue, jobId!, { ok: true });
-  await new Promise((r) => setTimeout(r, 100));
+  // Wait specifically for the completed transition's 'job' emit — the per-type
+  // listener fires just before it, so once this lands both are present.
+  await waitFor(() => order.includes('job-listener(completed)'), {
+    message: 'completed transition emitted',
+  });
 
   const idx = order.indexOf('completed-listener');
   expect(idx).toBeGreaterThanOrEqual(0);
@@ -118,7 +123,7 @@ test('seq on emitted events is monotonically increasing', async () => {
     await h.boss.fetch(queue);
     await h.boss.complete(queue, jobId!, { i });
   }
-  await new Promise((r) => setTimeout(r, 200));
+  await waitFor(() => seqs.length >= 9, { message: '9 job events' });
 
   expect(seqs.length).toBe(9);
   for (let i = 1; i < seqs.length; i++) {
@@ -143,7 +148,9 @@ test("unknown state passes through with event = state and fires 'warning' once",
   });
   await h.pool.query(`SELECT pg_notify('pgbossier_job', $1)`, [payload1]);
   await h.pool.query(`SELECT pg_notify('pgbossier_job', $1)`, [payload2]);
-  await new Promise((r) => setTimeout(r, 100));
+  await waitFor(() => jobEvents.length >= 2 && warnings.length >= 1, {
+    message: '2 paused events + 1 warning',
+  });
 
   expect(jobEvents).toEqual([
     { event: 'paused', state: 'paused' },
@@ -167,7 +174,10 @@ test("thrown handler routes to 'error' (reason='handler'); stream continues", as
   const jobId = await h.boss.send(queue, {});
   await h.boss.fetch(queue);
   await h.boss.complete(queue, jobId!, { ok: true });
-  await new Promise((r) => setTimeout(r, 200));
+  await waitFor(
+    () => after.includes('completed') && errors.some((e) => e.reason === 'handler'),
+    { message: "completed event + 'handler' error" },
+  );
 
   expect(errors.some((e) => e.reason === 'handler')).toBe(true);
   expect(after).toContain('completed');
@@ -186,7 +196,10 @@ test("malformed JSON fires 'error' (reason='parse'); stream continues", async ()
   const queue = 'evt-after-parse-error';
   await h.boss.createQueue(queue);
   await h.boss.send(queue, {});
-  await new Promise((r) => setTimeout(r, 150));
+  await waitFor(
+    () => errors.some((e) => e.reason === 'parse') && jobEventsAfter > 0,
+    { message: "'parse' error + a later job event" },
+  );
 
   expect(errors.map((e) => e.reason)).toContain('parse');
   expect(jobEventsAfter).toBeGreaterThan(0);
@@ -206,6 +219,8 @@ test("reconnect after pg_terminate_backend; 'error' (gap) then 'connected'", asy
   expect(rows.length).toBeGreaterThan(0);
   await h.pool.query(`SELECT pg_terminate_backend($1)`, [rows[0]!.pid]);
 
+  // Reconnect timing test — a fixed wait is intentional (we're measuring the
+  // backoff+reconnect cycle, not just waiting for one event).
   await new Promise((r) => setTimeout(r, 3000));
 
   expect(log).toContain('connected');
@@ -217,7 +232,7 @@ test("reconnect after pg_terminate_backend; 'error' (gap) then 'connected'", asy
   const got: string[] = [];
   events.on('job', (e) => got.push(e.event));
   await h.boss.send(queue, {});
-  await new Promise((r) => setTimeout(r, 200));
+  await waitFor(() => got.includes('created'), { message: 'event after reconnect' });
   expect(got).toContain('created');
 
   await events.close();
@@ -244,7 +259,9 @@ test('close() during backoff wait cancels reconnect', async () => {
 test('AbortSignal.abort() closes the subscriber', async () => {
   const ac = new AbortController();
   const events = await subscribeEvents(h.pool, SCHEMAS, { signal: ac.signal });
+  void events;
   ac.abort();
+  // Fixed wait: connection-release timing after abort, not an event to poll for.
   await new Promise((r) => setTimeout(r, 50));
   expect(h.pool.idleCount).toBe(h.pool.totalCount);
 });
@@ -265,7 +282,9 @@ test('two subscribers on the same pool both receive every event', async () => {
   const queue = 'evt-broadcast';
   await h.boss.createQueue(queue);
   const id = await h.boss.send(queue, {});
-  await new Promise((r) => setTimeout(r, 200));
+  await waitFor(() => aSeen.includes(id!) && bSeen.includes(id!), {
+    message: 'both subscribers see the event',
+  });
 
   expect(aSeen).toContain(id!);
   expect(bSeen).toContain(id!);
@@ -284,11 +303,13 @@ test('install() backfill does NOT fire events for historical pgboss.job rows', a
     const events = await subscribeEvents(h2.pool, SCHEMAS);
     const seen: string[] = [];
     events.on('job', (e) => seen.push(e.event));
+    // Negative assertion (nothing should fire): a fixed wait is correct here —
+    // there is no event to poll for.
     await new Promise((r) => setTimeout(r, 300));
     expect(seen.length).toBe(0);
 
     await h2.boss.send(queue, { after: 'subscribe' });
-    await new Promise((r) => setTimeout(r, 200));
+    await waitFor(() => seen.includes('created'), { message: 'post-subscribe event' });
     expect(seen).toContain('created');
     await events.close();
   } finally { await h2.teardown(); }
@@ -308,7 +329,7 @@ test('reconnect handles idle_session_timeout disconnect', async () => {
   events.on('connected', () => log.push('connected'));
   events.on('error', (ev) => log.push(`error:${ev.reason}`));
 
-  // Wait long enough for idle_session_timeout to fire (~2s) and reconnect to complete (~3s).
+  // Reconnect timing test — fixed wait for idle_session_timeout (~2s) + reconnect (~3s).
   await new Promise((r) => setTimeout(r, 5000));
 
   expect(log.filter((s) => s === 'connected').length).toBeGreaterThanOrEqual(2);
@@ -329,7 +350,7 @@ test('subscriber receives every event during a burst (notification flood)', asyn
   const sends: Promise<string | null>[] = [];
   for (let i = 0; i < N; i++) sends.push(h.boss.send(queue, { i }));
   await Promise.all(sends);
-  await new Promise((r) => setTimeout(r, 1500));
+  await waitFor(() => received >= N, { timeout: 8000, message: `all ${String(N)} created events` });
   expect(received).toBe(N);
   await events.close();
 }, 30_000);
