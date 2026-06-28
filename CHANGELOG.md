@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-28
+
+Patch release tagged `v0.6.1` on `develop` for the descent-app **v0.6.1** validation pass (install via the git tag until then). Bug fixes to the bring-your-own-connection (ORM) path and lifecycle events, plus test/CI tooling — no public API change. The first npm publish and the `develop` → `main` release stay **held pending that validation**.
+
 ### Added
 
 - **High-volume lifecycle storm test** (`test/battle/storm.test.ts`, `npm run test:storm`). Pushes **10k–1M real jobs** through the full pg-boss lifecycle (bulk `boss.insert` → concurrent fetch → complete/fail/retry/cancel) in a single pass, verified by one aggregate SQL oracle — surfacing backlog/memory/lock-contention the bounded battle+soak path (capped ~2000/iteration by its serial send + per-job oracle) can't. Scales via `BATTLE_STORM_N` (default 0 = skipped, like the soak). New `.github/workflows/battle-storm.yml` runs a sane default on PRs and a big 100k/1M on demand (`workflow_dispatch`). Engine additions: `bulkSendWorkload` (chunked insert + cancel, plan encoded in job data), `runStormDriver` (explicit pull-pattern complete/fail), `assertStormSql` (set-based oracle).
 
 ### Changed
 
-- **Perf scale runs** (`perf-scale.yml`): bumped the job timeout 30 → 60 min and made samples-per-method configurable via `PERF_ITERS` (default 100). A `PERF_N=1000000` run with the default 100 iterations overran the old 30-min cap (the full-scan read methods × 100 iters dominate); lower `PERF_ITERS` (~20) for 1M.
+- **Perf scale runs** (`perf-scale.yml`): bumped the job timeout 30 → 60 min and made samples-per-method configurable via `PERF_ITERS` (default 100). A `PERF_N=1000000` run with the default 100 iterations overran the old 30-min cap (the full-scan read methods × 100 iters dominate); lower `PERF_ITERS` (~20) for 1M. CI-validated: 1M perf ~8 min (iters=20), 1M storm ~45 min — both green.
+- **Test/CI tooling.** Pinned `vitest` to an exact version (`^4.1.7` → `4.1.7`) — `vitest bench` prints an "experimental feature, pin your version" advisory, so pinning is the actionable response and guards the perf tooling against silent `bench()` output drift. Migrated the test config off Vitest 4's removed `poolOptions` (`poolOptions.threads.{minThreads,maxThreads}` → top-level `pool: 'threads'` + `maxWorkers: 4`). Clarified that the battle/soak `<=2000`/iteration guidance is a *harness* limit (serial send + per-job oracle), not a pg-bossier/pg-boss engine cap.
+
+### Fixed
+
+- **No-row warnings now fire on the bring-your-own-connection (ORM) path.** `setProgress`, `recordInputSnapshot`, and `recordDeadLetter` detected a zero-row UPDATE via `result.rowCount`, but pg-boss's `executeSql` contract (the path used when pg-bossier runs through `boss.getDb()` — e.g. a Prisma/Kysely/Knex/Drizzle-backed pg-boss) returns only `{ rows }`, leaving `rowCount` `undefined`. So their "matched no record" / `not_found` / `conflict` diagnostics never fired on an ORM connection. All three now use `RETURNING` + `rows.length`, matching `setClaim` / `prune`. The underlying UPDATE always worked; only the diagnostics were silent.
+- **`getEventsSince` now returns `claimedBy`.** It used an explicit column list that didn't include the new `claimed_by` column, so every event row came back with `claimedBy` `undefined` while every other reader populated it. Switched to `SELECT *` like the sibling readers (so a future column add can't silently drop again).
 
 ## [0.6.0] - 2026-06-27
 
@@ -99,8 +109,6 @@ First versioned release tagged `v0.6.0` on `develop`. The npm publish is **prepa
 
 - **CLI no longer aborts on a non-URL connection string** ([#44](https://github.com/elfensky/pg-bossier/issues/44)). `bin/pgbossier.js` parsed the DSN with `new URL()` only to pretty-print the destination before connecting; a libpq keyword/value DSN (`host=… dbname=…`) threw `Invalid URL` and killed the command (exit 2) from that cosmetic line, before any connect was attempted. The print is now wrapped in `try/catch` and degrades gracefully (omits `host`/`database`, and never echoes the raw string, which could carry a password) so the *connect* path decides whether the DSN is usable.
 - **Docs synced with code** ([#45](https://github.com/elfensky/pg-bossier/issues/45)): `CLAUDE.md` corrected from `fileParallelism: false` (one container per file) to the actual `fileParallelism: true` / `maxThreads: 4` (changed in `e5614e7` for [#24](https://github.com/elfensky/pg-bossier/issues/24)), and the Node requirement in `CLAUDE.md` + `README.md` updated from `≥ 18` to `≥ 20.4` to match the v0.4.2 engines floor.
-- **No-row warnings now fire on the bring-your-own-connection (ORM) path.** `setProgress`, `recordInputSnapshot`, and `recordDeadLetter` detected a zero-row UPDATE via `result.rowCount`, but pg-boss's `executeSql` contract (the path used when pg-bossier runs through `boss.getDb()` — e.g. a Prisma/Kysely/Knex/Drizzle-backed pg-boss) returns only `{ rows }`, leaving `rowCount` `undefined`. So their "matched no record" / `not_found` / `conflict` diagnostics never fired on an ORM connection. All three now use `RETURNING` + `rows.length`, matching `setClaim` / `prune`. The underlying UPDATE always worked; only the diagnostics were silent.
-- **`getEventsSince` now returns `claimedBy`.** It used an explicit column list that didn't include the new `claimed_by` column, so every event row came back with `claimedBy` `undefined` while every other reader populated it. Switched to `SELECT *` like the sibling readers (so a future column add can't silently drop again).
 
 ## [0.1.0] - 2026-06-21
 

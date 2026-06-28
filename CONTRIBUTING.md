@@ -53,7 +53,7 @@ npm run lint && npm run build && npm run test:types && npm test
 npm publish --dry-run
 # → surfaces metadata/files issues; runs `prepare` (tsc) end-to-end
 
-# 2. Decide the version. Latest tag is v0.6.0; bump per the version
+# 2. Decide the version. Latest tag is v0.6.1; bump per the version
 #    policy in CLAUDE.md (minor for features, patch for fixes).
 
 # 3. Switch to main, snapshot develop's tree (NOT git merge — develop
@@ -92,18 +92,18 @@ Consumers install pg-bossier via:
 
 ```bash
 # Primary (reproducible — tag-pinned to the latest release):
-npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.6.0'
+npm install 'git+https://github.com/elfensky/pg-bossier.git#v0.6.1'
 
 # Local pack:
 cd pg-bossier && npm pack
 cd ../consumer-app && npm install ../pg-bossier/pg-bossier-X.Y.Z.tgz
 ```
 
-The first `npm publish` (v0.6.0) is prepared but held pending a descent-app
-v0.6.0 validation pass; until it lands, the git-tag install above is the path.
+The first `npm publish` (v0.6.1) is prepared but held pending a descent-app
+v0.6.1 validation pass; until it lands, the git-tag install above is the path.
 
 ## Version policy
 
-- **v0.x.y** while the API surface is maturing (latest tag: `v0.6.0`). Minor bumps for features, patch bumps for fixes. Non-additive schema changes are minor bumps under 0.x.
-- **Version bumps and releases are decoupled** — see § Versioning and changelog in [CLAUDE.md](./CLAUDE.md). A bump lands on `develop` when a feature/milestone completes; the dev-marker tags (`v0.2.0` … `v0.5.0`, `v0.6.0`) live on `develop`, not on `main` release commits. The first `npm publish` (v0.6.0) is prepared but still held pending the descent-app v0.6.0 validation pass.
+- **v0.x.y** while the API surface is maturing (latest tag: `v0.6.1`). Minor bumps for features, patch bumps for fixes. Non-additive schema changes are minor bumps under 0.x.
+- **Version bumps and releases are decoupled** — see § Versioning and changelog in [CLAUDE.md](./CLAUDE.md). A bump lands on `develop` when a feature/milestone completes; the dev-marker tags (`v0.2.0` … `v0.5.0`, `v0.6.0`, `v0.6.1`) live on `develop`, not on `main` release commits. The first `npm publish` (v0.6.1) is prepared but still held pending the descent-app v0.6.1 validation pass.
 - **v1.0.0** only when the API surface is committed.
