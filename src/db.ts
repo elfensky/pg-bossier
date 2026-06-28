@@ -36,3 +36,40 @@ export function pgBossDb(boss: PgBoss): BossierDb {
       boss.getDb().executeSql(text, params) as Promise<QueryResult<R>>,
   };
 }
+
+/** Postgres SQLSTATE for a detected deadlock. */
+const DEADLOCK = '40P01';
+/** Deadlock retry attempts (#47) — a transient deadlock converges in 1-2. */
+const DEADLOCK_MAX_ATTEMPTS = 5;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** True if `err` is a Postgres deadlock (SQLSTATE 40P01). */
+export function isDeadlock(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === DEADLOCK;
+}
+
+/**
+ * Run `fn`, retrying on a Postgres deadlock (40P01) with a short randomized
+ * backoff (#47). A pg-bossier statement that needs a heavy lock on `pgboss.job`
+ * (the install/migrate trigger DDL) or contends with the live capture trigger on
+ * `pgbossier.record` (`prune`) can hit a transient deadlock against a running
+ * pg-boss — these almost always clear on a retry.
+ *
+ * `fn` MUST be safely re-runnable: either it owns no transaction (a single
+ * autocommit statement, e.g. prune's DELETE) or it rolls back its own
+ * transaction before it rejects (install's BEGIN/COMMIT block ROLLBACKs in its
+ * catch). Any non-deadlock error, or exhausting `maxAttempts`, re-throws.
+ */
+export async function withDeadlockRetry<T>(
+  fn: () => Promise<T>, maxAttempts = DEADLOCK_MAX_ATTEMPTS,
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isDeadlock(err) || attempt >= maxAttempts) throw err;
+      await sleep(25 * attempt + Math.floor(Math.random() * 50)); // backoff + jitter
+    }
+  }
+}

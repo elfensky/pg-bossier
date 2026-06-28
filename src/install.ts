@@ -5,6 +5,7 @@ import {
   recordIndexesSql, dropObsoleteIndexesSql,
   captureFunctionSql, captureTriggerSql, backfillChunkSql,
 } from './sql.js';
+import { withDeadlockRetry } from './db.js';
 
 export interface InstallOptions {
   /** Where pg-bossier's own objects live. Default: 'pgbossier'. */
@@ -65,31 +66,42 @@ async function applySchema(
   // Atomic: BEGIN/COMMIT around all DDL. Postgres supports DDL in transactions;
   // a mid-flight failure rolls back everything, so the schema is never left
   // half-built.
-  await client.query('BEGIN');
-  try {
-    // Serialize concurrent install/migrate across processes/replicas (#39
-    // autoMigrate): a transaction-scoped advisory lock keyed by the pgbossier
-    // schema name. Without it, two replicas racing to migrate can collide on
-    // CREATE/ALTER ... IF NOT EXISTS / CREATE OR REPLACE (Postgres doesn't fully
-    // serialize those existence checks). The loser now waits for the winner's
-    // COMMIT, then its own IF NOT EXISTS steps see everything present and no-op.
-    // Released automatically at COMMIT/ROLLBACK. Distinct schemas → distinct keys.
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`pgbossier:${s.pgbossier}`]);
-    await client.query(schemaSql(s));
-    await client.query(sequenceSql(s));
-    await client.query(recordTableSql(s));
-    // ADD COLUMN IF NOT EXISTS — brings a table from a prior shipped version up
-    // to the current column set without rewriting rows. No-op on a fresh table.
-    await client.query(alterRecordColumnsSql(s));
-    for (const idx of dropObsoleteIndexesSql(s)) await client.query(idx);
-    for (const idx of recordIndexesSql(s)) await client.query(idx);
-    await client.query(captureFunctionSql(s));
-    await client.query(captureTriggerSql(s));
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => { /* connection may be dead */ });
-    throw err;
-  }
+  //
+  // Retry-on-deadlock (#47): CREATE OR REPLACE of the capture trigger needs a
+  // heavy lock on pgboss.job while a live pg-boss is concurrently locking the
+  // same table (maintenance, queue writes, createQueue) in the opposite order →
+  // a transient deadlock (40P01) on every boot under the #39 "ensureInstalled
+  // right after boss.start()" pattern. The whole DDL is idempotent and rolls
+  // back as a unit (the catch ROLLBACKs), so withDeadlockRetry re-runs the block
+  // on a deadlock; it converges in 1-2 attempts. Any non-deadlock error re-throws
+  // immediately.
+  await withDeadlockRetry(async () => {
+    await client.query('BEGIN');
+    try {
+      // Serialize concurrent install/migrate across processes/replicas (#39
+      // autoMigrate): a transaction-scoped advisory lock keyed by the pgbossier
+      // schema name. Without it, two replicas racing to migrate can collide on
+      // CREATE/ALTER ... IF NOT EXISTS / CREATE OR REPLACE (Postgres doesn't fully
+      // serialize those existence checks). The loser now waits for the winner's
+      // COMMIT, then its own IF NOT EXISTS steps see everything present and no-op.
+      // Released automatically at COMMIT/ROLLBACK. Distinct schemas → distinct keys.
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`pgbossier:${s.pgbossier}`]);
+      await client.query(schemaSql(s));
+      await client.query(sequenceSql(s));
+      await client.query(recordTableSql(s));
+      // ADD COLUMN IF NOT EXISTS — brings a table from a prior shipped version up
+      // to the current column set without rewriting rows. No-op on a fresh table.
+      await client.query(alterRecordColumnsSql(s));
+      for (const idx of dropObsoleteIndexesSql(s)) await client.query(idx);
+      for (const idx of recordIndexesSql(s)) await client.query(idx);
+      await client.query(captureFunctionSql(s));
+      await client.query(captureTriggerSql(s));
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => { /* connection may be dead */ });
+      throw err;
+    }
+  });
 
   // Backfill runs AFTER the DDL commits — deliberately outside the transaction.
   // CREATE/DROP TRIGGER above takes a heavy lock on pgboss.job (DROP TRIGGER:

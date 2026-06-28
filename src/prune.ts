@@ -1,4 +1,4 @@
-import type { BossierDb } from './db.js';
+import { withDeadlockRetry, type BossierDb } from './db.js';
 import type { SchemaNames } from './sql.js';
 
 /** Bounds for {@link prune}. At least one is required. */
@@ -91,7 +91,13 @@ export async function prune(
   // BYO/ORM path, db = boss.getDb()) guarantees only `{ rows }` — every ORM
   // adapter (prisma/kysely/knex/drizzle) drops rowCount, so `rowCount` would be
   // undefined and the deleted count silently wrong on those backends.
-  const { rows } = await db.query<{ job_id: string }>(
+  //
+  // withDeadlockRetry (#47): this multi-row DELETE can deadlock against the live
+  // capture trigger upserting overlapping pgbossier.record rows. Unlike the
+  // fail-open writers, prune is fail-loud (it returns a count the caller trusts),
+  // so a transient deadlock must not surface — a single autocommit statement is
+  // safely re-runnable, so retry it.
+  const { rows } = await withDeadlockRetry(() => db.query<{ job_id: string }>(
     `WITH current AS (
        SELECT DISTINCT ON (job_id) job_id, queue, state,
               coalesce(completed_on, captured_at) AS done_at
@@ -110,6 +116,6 @@ export async function prune(
         AND ${eligibleWhere}
       RETURNING r.job_id`,
     params,
-  );
+  ));
   return { deleted: rows.length };
 }

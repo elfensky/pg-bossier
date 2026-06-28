@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-28
+
+Patch tagged `v0.7.1` on `develop` for the descent-app re-test — fixes the [#47](https://github.com/elfensky/pg-bossier/issues/47) startup deadlock (and the same lock-ordering class in `prune`). No public API change. The publish gate moves v0.7.0 → **v0.7.1**; install via the git tag until the npm publish.
+
+### Fixed
+
+- **`install()` / `migrate()` (and thus `ensureInstalled()` / `autoMigrate`) now retry the DDL transaction on a deadlock ([#47](https://github.com/elfensky/pg-bossier/issues/47)).** The capture-trigger `CREATE OR REPLACE` needs a heavy lock on `pgboss.job` while a *live* pg-boss holds locks on the same table in the opposite order (maintenance, queue writes, `createQueue`), so the recommended #39 "call `ensureInstalled()` right after `boss.start()`" pattern threw `deadlock detected` (SQLSTATE `40P01`) on every boot. The whole DDL block is idempotent and rolls back as a unit, so on `40P01` it now rolls back and retries with a short randomized backoff (up to 5 attempts) — it converges in 1–2. Any non-deadlock error still re-throws immediately, and the backfill (already outside the transaction, `ACCESS SHARE` only) was never the cause.
+- **`prune()` now retries its `DELETE` on a deadlock too** (same `withDeadlockRetry` helper, lifted to `src/db.ts`). `prune` is fail-loud (it returns a deleted-count the caller trusts, unlike the fail-open audit writers), and its multi-row `DELETE` can deadlock against the live capture trigger upserting overlapping `pgbossier.record` rows — so a transient `40P01` there would have surfaced to the caller. Found while auditing for other instances of the #47 lock-ordering class; the fail-open writers and the capture trigger (which swallows deadlocks in its own `EXCEPTION` block) need no change.
+
 ## [0.7.0] - 2026-06-28
 
 Minor bump tagged `v0.7.0` on `develop` — a post-0.6.1 API-consistency cleanup from a code-health (desloppify subjective) review. Two **pre-1.0 breaking** changes (the `getInputSnapshot` split and the trimmed standalone export surface); the rest is internal/cosmetic. No new capability. The first npm publish and the `develop` → `main` release stay **held pending a descent-app validation pass** — the publish gate moves from v0.6.1 to **v0.7.0**.
