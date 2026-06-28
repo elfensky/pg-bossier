@@ -52,6 +52,7 @@
         "test": "vitest run",
         "test:types": "tsc -p tsconfig.test.json",
         "test:perf": "vitest bench --config vitest.perf.config.ts --run",
+        "perf:report": "node scripts/perf-report.mjs",
         "test:soak": "vitest run test/battle/soak.test.ts",
         "test:storm": "vitest run test/battle/storm.test.ts"
     },

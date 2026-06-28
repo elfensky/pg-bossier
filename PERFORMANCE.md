@@ -150,6 +150,18 @@ git show origin/metrics:perf-metrics.jsonl | jq -s 'sort_by(.recorded_at)' | jq 
 git show origin/metrics:perf-metrics.jsonl | jq -c '{commit_sha: .commit_sha[0:7], p99: (.methods | map({(.method_id): .p99_ms}) | add)}'  # one-line summary per record
 ```
 
+### Whole-series report (`npm run perf:report`)
+
+`perf-compare.mjs` diffs a PR against **one** baseline — two points. To read the **whole** series at once (per-method first/last/min/max/median-of-medians + p99 ceiling, plus a step-change detector), run:
+
+```sh
+git fetch origin metrics            # once, so the script can read the branch
+npm run perf:report                 # auto-reads origin/metrics:perf-metrics.jsonl
+node scripts/perf-report.mjs path/to/perf-metrics.jsonl   # or point it at a file
+```
+
+The step-change detector flags any method whose median jumps ≥1.5× between consecutive records, and clusters those by commit: a step **shared across ≥3 methods** at one commit is a runner/workload/schema shift (e.g. the #21 all-states populate rebuild, or `ubuntu-latest` reassigning the runner CPU — the series spans several CPU models), **not** a per-method code regression. This is the signal a two-point PR diff structurally can't see. Stdlib-only, like the sibling scripts; `--selftest` runs a built-in self-check.
+
 ---
 
 ## 5. Regression thresholds — what trips a status check
@@ -263,7 +275,8 @@ Still out of scope:
 | Container + populate setup                 | `test/perf/global-setup.ts`                                    |
 | Canonical method IDs (single source of truth) | `scripts/perf-methods.mjs`                                  |
 | CI writer                                  | `scripts/perf-write.mjs`                                       |
-| PR comparer                                | `scripts/perf-compare.mjs`                                     |
+| PR comparer (two-point diff)               | `scripts/perf-compare.mjs`                                     |
+| Whole-series report (`npm run perf:report`) | `scripts/perf-report.mjs`                                     |
 | Write workflow (develop)                   | `.github/workflows/perf-history.yml`                           |
 | Read workflow (PRs)                        | `.github/workflows/perf-pr.yml`                                |
 | On-demand scale run (large `PERF_N`)       | `.github/workflows/perf-scale.yml`                             |

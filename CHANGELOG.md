@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`npm run perf:report` (`scripts/perf-report.mjs`)** — a whole-series report over the `metrics`-branch `perf-metrics.jsonl`. Where `perf-compare.mjs` diffs a PR against a single baseline (two points), this reads every record and prints per-method first/last/min/max/median-of-medians + p99 ceiling, plus a step-change detector that flags ≥1.5× consecutive-median jumps and clusters them by commit — so a workload/schema/runner shift shared across methods (e.g. the #21 populate rebuild, or `ubuntu-latest` swapping the runner CPU) reads as exactly that, not a per-method code regression. Auto-reads `origin/metrics:perf-metrics.jsonl` (or takes a path); stdlib-only with a `--selftest`. Documented in PERFORMANCE.md §4.
+
 ## [0.7.1] - 2026-06-28
 
 Patch tagged `v0.7.1` on `develop` for the descent-app re-test — fixes the [#47](https://github.com/elfensky/pg-bossier/issues/47) startup deadlock (and the same lock-ordering class in `prune`). No public API change. The publish gate moves v0.7.0 → **v0.7.1**; install via the git tag until the npm publish.
