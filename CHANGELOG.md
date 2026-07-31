@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Repo conformance sweep.** Added `dependabot.yml` (npm + github-actions, minor/patch grouped),
+  a version-bump gate workflow (advisory, PR-triggered), a `gitleaks` job in `ci.yml` (secret
+  history scan), `mise.toml` (node 24), and Prettier (`.prettierrc`, a `format` script, and the
+  devDependency). `AGENTS.md` is now the real agent file with `CLAUDE.md` symlinked to it;
+  `graphify-out/` is generated locally and git-ignored. Dependabot security updates and
+  secret-scanning push protection enabled repo-side. No version bump — notes accumulate under
+  `[Unreleased]`.
+
 ### Added
 
 - **`npm run perf:report` (`scripts/perf-report.mjs`)** — a whole-series report over the `metrics`-branch `perf-metrics.jsonl`. Where `perf-compare.mjs` diffs a PR against a single baseline (two points), this reads every record and prints per-method first/last/min/max/median-of-medians + p99 ceiling, plus a step-change detector that flags ≥1.5× consecutive-median jumps and clusters them by commit — so a workload/schema/runner shift shared across methods (e.g. the #21 populate rebuild, or `ubuntu-latest` swapping the runner CPU) reads as exactly that, not a per-method code regression. Auto-reads `origin/metrics:perf-metrics.jsonl` (or takes a path); stdlib-only with a `--selftest`. Documented in PERFORMANCE.md §4.
