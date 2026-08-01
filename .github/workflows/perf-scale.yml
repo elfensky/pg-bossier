@@ -32,7 +32,7 @@ jobs:
       - run: npm ci
       - name: Run perf bench at PERF_N=${{ inputs.n }} PERF_ITERS=${{ inputs.iters || '100' }}
         run: PERF_N='${{ inputs.n }}' PERF_ITERS='${{ inputs.iters || '100' }}' npm run test:perf
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: perf-output-n${{ inputs.n }}
           path: perf-output.json
