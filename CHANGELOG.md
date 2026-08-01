@@ -10,12 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Repo conformance sweep.** Added `dependabot.yml` (npm + github-actions, minor/patch grouped),
-  a version-bump gate workflow (advisory, PR-triggered), a `gitleaks` job in `ci.yml` (secret
-  history scan), `mise.toml` (node 24), and Prettier (`.prettierrc`, a `format` script, and the
-  devDependency). `AGENTS.md` is now the real agent file with `CLAUDE.md` symlinked to it;
-  `graphify-out/` is generated locally and git-ignored. Dependabot security updates and
-  secret-scanning push protection enabled repo-side. No version bump — notes accumulate under
-  `[Unreleased]`.
+  a version-bump gate workflow (advisory, PR-triggered), `mise.toml` (node 24), and Prettier
+  (`.prettierrc`, a `format` script, and the devDependency). `AGENTS.md` is now the real agent file
+  with `CLAUDE.md` symlinked to it; `graphify-out/` is generated locally and git-ignored.
+  Dependabot security updates and GitHub-native secret scanning + push protection enabled repo-side
+  (no third-party gitleaks). No version bump — notes accumulate under `[Unreleased]`.
 
 ### Added
 
