@@ -1,7 +1,7 @@
 # Dependencies
 node_modules/
 
-# Git worktrees (per CLAUDE.md § Branching, worktrees, and Git workflow)
+# Git worktrees (per CLAUDE.md § Worktrees — one lane, always)
 .worktrees/
 
 # Build output

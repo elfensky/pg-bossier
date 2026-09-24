@@ -29,7 +29,7 @@ The canonical scope document is **[issue #1](https://github.com/elfensky/pg-boss
 - **KISS.** Simple solutions only. Don't overengineer. Don't add abstractions for hypothetical future needs. Three similar lines beats a premature abstraction. When in doubt about an open question, default to the simpler choice and surface the tradeoff rather than silently picking a clever one.
 - **Report outcomes faithfully.** If lint, build, or tests fail, say so with the actual output. If you didn't run a verification step, say so — don't imply it ran. Never claim "all checks pass" when output shows failures. Never suppress or simplify failing checks to manufacture a green result. Never characterize incomplete or broken work as done.
 - **Keep docs in sync with code.** When a change affects `CLAUDE.md`, `CHANGELOG.md`, or an open issue, update the doc in the same change — not a separate follow-up. Stale docs are worse than no docs.
-- **`main` only ever receives release commits and hotfixes** — never a direct or feature commit. On `develop`: large features go through a worktree → branch → `--no-ff` merge; bugfixes, chores, and docs may be committed directly. See § Branching, worktrees, and Git workflow.
+- **`main` only ever receives release commits and hotfixes** — never a direct or feature commit. Every change — feature, fix, chore or docs — is made in its own worktree under `.worktrees/` and reaches `develop` by a rebase-merged PR; nothing is committed in the main checkout. See § Worktrees — one lane, always.
 
 ## What pg-bossier is
 
@@ -165,39 +165,46 @@ Two long-lived branches:
 - **`develop`** — the integration branch, and the repo's default branch. Full commit history; all day-to-day work happens here.
 - **`main`** — the release ledger. One commit per release, each a squashed snapshot of `develop` at release time. `main` receives nothing else (except hotfixes) — never a direct commit. It is intentionally empty until the first release.
 
-**What needs a feature branch:** large features go through a worktree → branch → `--no-ff` merge into `develop`. Bugfixes, chores, refactors, and docs may be committed directly to `develop` — no worktree, no branch. When in doubt, or when a change wants isolation and incremental review, use a branch.
-
-**Feature workflow (worktree per branch)** — for large features:
-
-1. Create the worktree off `develop` (run from the main checkout):
-   `git worktree add .worktrees/<branch-dir> -b <branch-name> develop`
-2. `cd` into the worktree and install: `npm install`
-3. Do the work in the worktree directory — small, logical commits as you go (schema → impl → wire-up → tests), not one giant commit at the end
-4. Verify in the worktree before merging back: `npm run lint && npm run build && npm test`
-5. Merge into `develop` (from a `develop` checkout): `git merge --no-ff <branch-name>`. No version bump here.
-6. Make sure the change has a `CHANGELOG.md` entry under `## [Unreleased]` — see § Versioning and changelog.
-7. Push: `git push origin develop`
-8. Clean up: `git worktree remove .worktrees/<branch-dir>` + `git branch -d <branch-name>`
+**Every change goes through a worktree and a PR** — features, bugfixes, chores, refactors and docs alike; see § Worktrees — one lane, always. Before opening the PR, verify in the worktree: `npm run lint && npm run build && npm test`, and make sure a user-visible change has a `CHANGELOG.md` entry under `## [Unreleased]` — see § Versioning and changelog. No version bump in an ordinary PR.
 
 **Release workflow (`develop` → `main`):**
 
 A release is a single squashed commit on `main` that snapshots `develop`:
 
-1. Snapshot `develop`'s tree onto `main` — a tree snapshot, **not** `git merge --squash`. `main` and `develop` have unrelated histories by design, so a real merge would conflict; the release takes `develop`'s tree wholesale.
-2. In that same release commit: bump `package.json` + `package-lock.json` (minor for features, patch for fixes), and rename `CHANGELOG.md`'s `[Unreleased]` to the dated version section, opening a fresh `[Unreleased]` back on `develop`.
-3. Commit on `main` as `Release X.Y.Z`; push `main`.
+1. In a worktree off `origin/main` (`.worktrees/release-X.Y.Z`, branch `release/X.Y.Z`), snapshot `develop`'s tree: `git read-tree -u --reset origin/develop` — a tree snapshot, **not** `git merge --squash`. `main` and `develop` have unrelated histories by design, so a real merge would conflict (and GitHub cannot open a PR `develop` → `main`); the release takes `develop`'s tree wholesale.
+2. In that same release commit: bump `package.json` + `package-lock.json` (minor for features, patch for fixes), and rename `CHANGELOG.md`'s `[Unreleased]` to the dated version section. Open a fresh `[Unreleased]` back on `develop` by a separate PR.
+3. Commit as `Release X.Y.Z`, open a PR `release/X.Y.Z` → `main` and rebase-merge it, so `main` stays one commit per release. Tag the resulting commit on `origin/main` after the merge — the rebase-merge rewrites the SHA.
 4. `main` and `develop` diverge in the commit graph by design — the version number and `CHANGELOG.md` are the link between them, not git ancestry.
 
-**Hotfixes:** branch from `main`, fix, land on `main` as a patch release commit, then port the fix to `develop` (cherry-pick).
-
-**Worktree directory:** `.worktrees/` in project root (gitignored). Directory names mirror the branch name with slashes replaced by hyphens.
+**Hotfixes:** in a worktree off `origin/main`, fix, land on `main` by PR as a patch release commit, then port the fix to `develop` by cherry-picking it in a worktree off `origin/develop` and opening a PR.
 
 **Commit and merge rules:**
 
-- **Feature → `develop` merges are `--no-ff`, never squashed.** `develop` preserves the full commit history.
+- **Every PR into `develop` is rebase-merged** — the `develop` ruleset allows nothing else, so `develop` stays linear with one commit per logical change.
 - **`develop` → `main` releases are squashed** — one commit per release. This is the *only* place squashing is used.
-- **No `--rebase` merges** into `develop` — preserve the branch shape.
-- **Commit incrementally on feature branches.** Each commit should be a coherent unit of progress that a reviewer (or a future you) can read independently.
+- **Commit incrementally on feature branches.** Each commit should be a coherent unit of progress that a reviewer (or a future you) can read independently — rebase-merge keeps each one on `develop`.
+
+## Worktrees — one lane, always
+
+Every session — feature, chore or one-line fix — works in its own worktree under `.worktrees/`
+(git-ignored), never in the main checkout. The main checkout stays on `develop` and moves only by
+`git pull --ff-only`: a branch parked there is how parallel sessions commit onto each other's work.
+Every change reaches `develop` by a PR. The why: vault `knowledge/developer/stack/git-and-prs.md`.
+
+```bash
+git status -sb && git pull --ff-only             # main checkout: sync only, never commit here
+git worktree prune && git fetch -q --prune origin
+git worktree add --lock --reason "$(hostname -s)" .worktrees/<slug> -b <type>/<slug> origin/develop
+cd .worktrees/<slug>                             # work and commit here
+git push -u origin HEAD && gh pr create --base develop --fill
+gh pr checks --watch --required && gh pr merge --rebase --delete-branch
+cd - && git pull --ff-only
+git worktree unlock .worktrees/<slug> && git worktree remove .worktrees/<slug> && git branch -D <type>/<slug>
+```
+
+A new worktree has no dependencies installed: run `npm ci` in it first. A locked worktree
+you did not create belongs to another session — leave it. `.claude/worktrees/` is Claude Code's own
+subagent isolation and is managed by the harness.
 
 ## Language
 

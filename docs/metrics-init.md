@@ -8,27 +8,26 @@ A maintainer runs the steps below **once**.
 
 ## Steps
 
-From a clean checkout of `develop`:
+From the main checkout, in a throwaway worktree — the main checkout itself stays on `develop`:
 
 ```bash
-# 1. Create the orphan branch
-git checkout --orphan metrics
+# 1. Create the orphan branch in its own worktree (starts with an empty tree)
+git worktree add --lock --reason "$(hostname -s)" --orphan -b metrics .worktrees/metrics
+cd .worktrees/metrics
 
-# 2. Strip all files inherited from develop's tree
-git rm -rf .
-
-# 3. Seed an empty JSONL file
+# 2. Seed an empty JSONL file
 printf '' > perf-metrics.jsonl
 
-# 4. Add and commit
+# 3. Add and commit
 git add perf-metrics.jsonl
 git commit -m "init: metrics chronicle (orphan branch)"
 
-# 5. Push, setting upstream
+# 4. Push, setting upstream
 git push -u origin metrics
 
-# 6. Switch back to develop — the orphan branch is meant to be touched only by CI
-git checkout develop
+# 5. Remove the worktree — the orphan branch is meant to be touched only by CI
+cd - && git worktree unlock .worktrees/metrics && git worktree remove .worktrees/metrics
+git branch -D metrics
 ```
 
 ## Verifying
