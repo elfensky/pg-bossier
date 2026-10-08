@@ -26,7 +26,7 @@ jobs:
     # you storm beyond 1M.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version-file: .node-version
