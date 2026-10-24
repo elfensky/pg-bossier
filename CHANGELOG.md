@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `CLAUDE.md` symlinked to it; `graphify-out/` is generated locally and git-ignored.
   Dependabot security updates and GitHub-native secret scanning + push protection enabled repo-side
   (no third-party gitleaks). No version bump — notes accumulate under `[Unreleased]`.
+- **Dev toolchain and CI default moved to Node 26** (`.node-version`, `mise.toml`; Active LTS from
+  2026-10-28). `engines.node` stays `>=20.4.0` — consumers are unaffected.
 
 ### Added
 
