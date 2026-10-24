@@ -149,5 +149,6 @@ Workarounds:
 pg-bossier requires Node ≥ 20.4.0 (`engines.node` in package.json) — the
 floor was raised to 20.4.0 for `Symbol.asyncDispose`, which the
 lifecycle-event transport uses for `await using` (and the CLI uses
-`util.parseArgs`, available since 18.3). CI runs on Node 24 (the active
-LTS), pinned via `.node-version`.
+`util.parseArgs`, available since 18.3). CI runs on Node 26 (Active LTS
+from 2026-10-28), pinned via `.node-version`; CI does not run on the
+20.4 floor itself.
